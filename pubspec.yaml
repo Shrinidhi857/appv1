@@ -39,6 +39,8 @@ dependencies:
   google_fonts: ^6.3.3
   glass: ^2.0.0+2
   flutter_bluetooth_serial: ^0.4.0
+  webview_flutter: ^4.4.2
+  flutter_secure_storage: ^9.0.0
 
 dev_dependencies:
   flutter_test:

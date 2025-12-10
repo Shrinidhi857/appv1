@@ -1,0 +1,144 @@
+.transcription-container {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-md);
+}
+
+.transcription-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.transcription-title {
+    font-family: 'Urbanist', sans-serif;
+    font-weight: 600;
+    font-size: 18px;
+    color: var(--text-primary);
+}
+
+.clear-button {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    background: transparent;
+    border: 1px solid rgba(0, 0, 0, 0.2);
+    border-radius: var(--radius-sm);
+    color: var(--text-secondary);
+    font-family: 'Urbanist', sans-serif;
+    font-weight: 500;
+    font-size: 13px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.clear-button:hover {
+    background: rgba(0, 0, 0, 0.05);
+    border-color: rgba(0, 0, 0, 0.3);
+    color: var(--text-primary);
+}
+
+.clear-button:active {
+    transform: scale(0.95);
+}
+
+.transcription-content {
+    min-height: 200px;
+    max-height: 400px;
+    overflow-y: auto;
+    padding: var(--spacing-lg);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-card);
+}
+
+/* Empty State */
+.empty-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 200px;
+    gap: var(--spacing-md);
+}
+
+.empty-text {
+    font-family: 'Urbanist', sans-serif;
+    font-weight: 400;
+    font-size: 14px;
+    color: var(--text-secondary);
+}
+
+/* Transcription Text */
+.transcription-text {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-sm);
+}
+
+.final-text {
+    font-family: 'Urbanist', sans-serif;
+    font-weight: 400;
+    font-size: 16px;
+    line-height: 1.6;
+    color: var(--text-primary);
+    margin: 0;
+}
+
+.interim-text {
+    font-family: 'Urbanist', sans-serif;
+    font-weight: 400;
+    font-size: 16px;
+    line-height: 1.6;
+    color: var(--text-secondary);
+    font-style: italic;
+    margin: 0;
+    opacity: 0.7;
+}
+
+/* Word Count */
+.word-count {
+    font-family: 'Urbanist', sans-serif;
+    font-weight: 500;
+    font-size: 12px;
+    color: var(--text-secondary);
+    text-align: right;
+}
+
+/* Scrollbar for transcription */
+.transcription-content::-webkit-scrollbar {
+    width: 6px;
+}
+
+.transcription-content::-webkit-scrollbar-track {
+    background: rgba(0, 0, 0, 0.05);
+    border-radius: var(--radius-sm);
+}
+
+.transcription-content::-webkit-scrollbar-thumb {
+    background: rgba(0, 0, 0, 0.2);
+    border-radius: var(--radius-sm);
+}
+
+.transcription-content::-webkit-scrollbar-thumb:hover {
+    background: rgba(0, 0, 0, 0.3);
+}
+
+/* Responsive */
+@media (max-width: 480px) {
+    .transcription-content {
+        min-height: 180px;
+        max-height: 300px;
+        padding: var(--spacing-md);
+    }
+
+    .final-text,
+    .interim-text {
+        font-size: 15px;
+    }
+
+    .transcription-title {
+        font-size: 16px;
+    }
+}

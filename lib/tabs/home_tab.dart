@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../components/frostedglass.dart';
 import '../theme/app_colors.dart';
+import '../pages/Abled_to_Sign/SpeechToTextPage.dart';
 
 class HomeTab extends StatefulWidget {
   const HomeTab({super.key});
@@ -326,6 +327,94 @@ class _HomeTabState extends State<HomeTab> {
                 ),
 
                 const SizedBox(height: 20),
+                
+                // ---- Speech to Text Button ----
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 20),
+                  child: GestureDetector(
+                    onTap: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (context) => const SpeechToTextPage(),
+                        ),
+                      );
+                    },
+                    child: Container(
+                      padding: const EdgeInsets.all(20),
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          colors: [
+                            const Color(0xFF00C853).withOpacity(0.15),
+                            const Color(0xFF00C853).withOpacity(0.05),
+                          ],
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                        ),
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(
+                          color: const Color(0xFF00C853).withOpacity(0.3),
+                          width: 1.5,
+                        ),
+                        boxShadow: [
+                          BoxShadow(
+                            color: const Color(0xFF00C853).withOpacity(0.2),
+                            blurRadius: 15,
+                            spreadRadius: 1,
+                          ),
+                        ],
+                      ),
+                      child: Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF00C853).withOpacity(0.2),
+                              shape: BoxShape.circle,
+                            ),
+                            child: const Icon(
+                              Icons.mic,
+                              color: Color(0xFF00C853),
+                              size: 24,
+                            ),
+                          ),
+                          const SizedBox(width: 16),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'Speech to Text',
+                                  style: GoogleFonts.urbanist(
+                                    fontSize: 18,
+                                    fontWeight: FontWeight.w700,
+                                    color: AppColors.textPrimary,
+                                  ),
+                                ),
+                                const SizedBox(height: 4),
+                                Text(
+                                  'Convert your speech to text',
+                                  style: GoogleFonts.urbanist(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w500,
+                                    color: AppColors.textSecondary,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const Icon(
+                            Icons.arrow_forward_ios,
+                            color: Color(0xFF00C853),
+                            size: 18,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+
+                const SizedBox(height: 20),
               ],
             ),
           ),
@@ -337,3 +426,4 @@ class _HomeTabState extends State<HomeTab> {
 
 // Note: You need to add this import at the top of the file:
 // import 'dart:ui';
+// import '../pages/Abled_to_Sign/SpeechToTextPage.dart';
