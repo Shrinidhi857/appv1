@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:webview_flutter/webview_flutter.dart';
+import 'package:webview_flutter_android/webview_flutter_android.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter/services.dart' show rootBundle;
 import 'dart:convert';
@@ -35,6 +36,7 @@ class _SpeechToTextPageState extends State<SpeechToTextPage> {
       final controller = WebViewController()
         ..setJavaScriptMode(JavaScriptMode.unrestricted)
         ..setBackgroundColor(const Color(0xFFF0EBF4))
+        ..enableZoom(false)
         ..setNavigationDelegate(
           NavigationDelegate(
             onPageStarted: (String url) {
@@ -70,6 +72,12 @@ class _SpeechToTextPageState extends State<SpeechToTextPage> {
             _handleMessageFromWebView(message.message);
           },
         );
+
+      // Enable file access for Android WebView to fix CORS issues
+      if (controller.platform is AndroidWebViewController) {
+        AndroidWebViewController.enableDebugging(true);
+        (controller.platform as AndroidWebViewController).setMediaPlaybackRequiresUserGesture(false);
+      }
 
       // Load HTML content with proper base URL for Android
       final String htmlContent = await rootBundle.loadString('assets/web/index.html');
