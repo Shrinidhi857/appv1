@@ -12,7 +12,7 @@ class SpeechToTextPage extends StatefulWidget {
 }
 
 class _SpeechToTextPageState extends State<SpeechToTextPage> {
-  late final WebViewController _controller;
+  WebViewController? _controller;
   final FlutterSecureStorage _secureStorage = const FlutterSecureStorage();
   bool _isLoading = true;
   String? _error;
@@ -25,29 +25,40 @@ class _SpeechToTextPageState extends State<SpeechToTextPage> {
 
   Future<void> _initializeWebView() async {
     try {
+      setState(() {
+        _isLoading = true;
+        _error = null;
+      });
+
       // Initialize WebView controller
-      _controller = WebViewController()
+      final controller = WebViewController()
         ..setJavaScriptMode(JavaScriptMode.unrestricted)
         ..setBackgroundColor(const Color(0xFFF0EBF4))
         ..setNavigationDelegate(
           NavigationDelegate(
             onPageStarted: (String url) {
-              setState(() {
-                _isLoading = true;
-              });
+              if (mounted) {
+                setState(() {
+                  _isLoading = true;
+                });
+              }
             },
             onPageFinished: (String url) async {
-              setState(() {
-                _isLoading = false;
-              });
+              if (mounted) {
+                setState(() {
+                  _isLoading = false;
+                });
+              }
               // Send API key to React app after page loads
               await _sendApiKeyToWebView();
             },
             onWebResourceError: (WebResourceError error) {
-              setState(() {
-                _error = 'Failed to load page: ${error.description}';
-                _isLoading = false;
-              });
+              if (mounted) {
+                setState(() {
+                  _error = 'Failed to load page: ${error.description}';
+                  _isLoading = false;
+                });
+              }
             },
           ),
         )
@@ -60,16 +71,26 @@ class _SpeechToTextPageState extends State<SpeechToTextPage> {
         );
 
       // Load the local HTML file
-      await _controller.loadFlutterAsset('assets/web/index.html');
+      await controller.loadFlutterAsset('assets/web/index.html');
+      
+      if (mounted) {
+        setState(() {
+          _controller = controller;
+        });
+      }
     } catch (e) {
-      setState(() {
-        _error = 'Error initializing WebView: $e';
-        _isLoading = false;
-      });
+      if (mounted) {
+        setState(() {
+          _error = 'Error initializing WebView: $e';
+          _isLoading = false;
+        });
+      }
     }
   }
 
   Future<void> _sendApiKeyToWebView() async {
+    if (_controller == null) return;
+    
     try {
       // Retrieve API key from secure storage
       String? apiKey = await _secureStorage.read(key: 'deepgram_api_key');
@@ -81,12 +102,14 @@ class _SpeechToTextPageState extends State<SpeechToTextPage> {
           'apiKey': apiKey,
         });
         
-        await _controller.runJavaScript('''
+        await _controller!.runJavaScript('''
           window.postMessage($message, '*');
         ''');
       } else {
         // No API key found - show dialog to enter it
-        _showApiKeyDialog();
+        if (mounted) {
+          _showApiKeyDialog();
+        }
       }
     } catch (e) {
       print('Error sending API key: $e');
@@ -298,8 +321,8 @@ class _SpeechToTextPageState extends State<SpeechToTextPage> {
                 ),
               ),
             )
-          else
-            WebViewWidget(controller: _controller),
+          else if (_controller != null)
+            WebViewWidget(controller: _controller!),
           if (_isLoading)
             Container(
               color: const Color(0xFFF0EBF4),
