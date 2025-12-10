@@ -70,8 +70,10 @@ class _SpeechToTextPageState extends State<SpeechToTextPage> {
           },
         );
 
-      // Load the local HTML file
-      await controller.loadFlutterAsset('assets/web/index.html');
+      // Load the local HTML file using loadRequest for better Android compatibility
+      // This ensures relative paths in HTML work correctly
+      final String htmlPath = await _getAssetFileUrl('assets/web/index.html');
+      await controller.loadRequest(Uri.parse(htmlPath));
       
       if (mounted) {
         setState(() {
@@ -86,6 +88,12 @@ class _SpeechToTextPageState extends State<SpeechToTextPage> {
         });
       }
     }
+  }
+
+  // Helper method to get proper file:// URL for assets
+  Future<String> _getAssetFileUrl(String assetPath) async {
+    // For Android, we need to use the flutter_assets path
+    return 'file:///android_asset/flutter_assets/$assetPath';
   }
 
   Future<void> _sendApiKeyToWebView() async {
