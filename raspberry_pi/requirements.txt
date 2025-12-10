@@ -1,0 +1,18 @@
+# Python Requirements for MediaPipe Hand Landmark Bluetooth Sender
+# For Raspberry Pi 5
+
+# Computer Vision
+opencv-python>=4.8.0
+mediapipe>=0.10.0
+
+# Camera Interface
+picamera2>=0.3.12
+
+# Bluetooth Communication
+pybluez>=0.30
+
+# GPIO Control (for full version)
+RPi.GPIO>=0.7.1
+
+# Optional but recommended
+numpy>=1.24.0

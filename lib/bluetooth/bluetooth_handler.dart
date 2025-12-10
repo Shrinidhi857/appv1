@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_bluetooth_serial/flutter_bluetooth_serial.dart';
+import 'landmark_receiver.dart';
 
 /// Enhanced Bluetooth Page with auto-connect to "Handspeaks"
 class BluetoothPage extends StatefulWidget {
@@ -48,31 +49,33 @@ class _BluetoothPageState extends State<BluetoothPage> {
 
     var subscription = _bluetooth.startDiscovery();
 
-    subscription.listen((result) {
-      final device = result.device;
+    subscription
+        .listen((result) {
+          final device = result.device;
 
-      // Add to list if not already present
-      if (!devices.any((d) => d.address == device.address)) {
-        setState(() => devices.add(device));
-      }
+          // Add to list if not already present
+          if (!devices.any((d) => d.address == device.address)) {
+            setState(() => devices.add(device));
+          }
 
-      // Auto-connect to "Handspeaks" when found
-      if (!autoConnecting &&
-          device.name != null &&
-          device.name!.toLowerCase().contains('handspeaks')) {
-        setState(() => autoConnecting = true);
-        _autoConnectToDevice(device);
-      }
-    }).onDone(() {
-      setState(() {
-        scanning = false;
-        if (!autoConnecting) {
-          status = devices.isEmpty
-              ? "No devices found. Pull to refresh."
-              : "Scan complete. Tap device to connect.";
-        }
-      });
-    });
+          // Auto-connect to "Handspeaks" when found
+          if (!autoConnecting &&
+              device.name != null &&
+              device.name!.toLowerCase().contains('handspeaks')) {
+            setState(() => autoConnecting = true);
+            _autoConnectToDevice(device);
+          }
+        })
+        .onDone(() {
+          setState(() {
+            scanning = false;
+            if (!autoConnecting) {
+              status = devices.isEmpty
+                  ? "No devices found. Pull to refresh."
+                  : "Scan complete. Tap device to connect.";
+            }
+          });
+        });
   }
 
   // File: bluetooth_page.dart (Inside _BluetoothPageState)
@@ -89,7 +92,15 @@ class _BluetoothPageState extends State<BluetoothPage> {
     }
 
     setState(() => status = "Found Handspeaks! Connecting...");
-    // ... rest of bonding and navigation logic ...
+
+    if (!device.isBonded) {
+      await FlutterBluetoothSerial.instance.bondDeviceAtAddress(device.address);
+    }
+
+    // Navigate to Landmark Receiver Screen
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => LandmarkDataScreen(device: device)),
+    );
   }
 
   void _manualConnect(BluetoothDevice device) async {
@@ -103,10 +114,13 @@ class _BluetoothPageState extends State<BluetoothPage> {
     if (!device.isBonded) {
       await FlutterBluetoothSerial.instance.bondDeviceAtAddress(device.address);
     }
+
+    // Navigate to Landmark Receiver Screen
     Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => _ChatScreen(device: device)),
+      MaterialPageRoute(builder: (_) => LandmarkDataScreen(device: device)),
     );
   }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -119,7 +133,10 @@ class _BluetoothPageState extends State<BluetoothPage> {
               child: SizedBox(
                 width: 20,
                 height: 20,
-                child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
+                child: CircularProgressIndicator(
+                  color: Colors.white,
+                  strokeWidth: 2,
+                ),
               ),
             ),
         ],
@@ -146,7 +163,9 @@ class _BluetoothPageState extends State<BluetoothPage> {
                       child: CircularProgressIndicator(strokeWidth: 2),
                     ),
                   ),
-                Expanded(child: Text(status, style: const TextStyle(fontSize: 14))),
+                Expanded(
+                  child: Text(status, style: const TextStyle(fontSize: 14)),
+                ),
               ],
             ),
           ),
@@ -155,45 +174,63 @@ class _BluetoothPageState extends State<BluetoothPage> {
           Expanded(
             child: devices.isEmpty
                 ? Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  const Icon(Icons.bluetooth_searching, size: 64, color: Colors.grey),
-                  const SizedBox(height: 16),
-                  Text(status, style: const TextStyle(color: Colors.grey)),
-                ],
-              ),
-            )
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        const Icon(
+                          Icons.bluetooth_searching,
+                          size: 64,
+                          color: Colors.grey,
+                        ),
+                        const SizedBox(height: 16),
+                        Text(
+                          status,
+                          style: const TextStyle(color: Colors.grey),
+                        ),
+                      ],
+                    ),
+                  )
                 : ListView.builder(
-              itemCount: devices.length,
-              itemBuilder: (context, index) {
-                final device = devices[index];
-                final isHandspeaks = device.name != null &&
-                    device.name!.toLowerCase().contains('handspeaks');
+                    itemCount: devices.length,
+                    itemBuilder: (context, index) {
+                      final device = devices[index];
+                      final isHandspeaks =
+                          device.name != null &&
+                          device.name!.toLowerCase().contains('handspeaks');
 
-                return Card(
-                  margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                  color: isHandspeaks ? Colors.green.shade50 : null,
-                  child: ListTile(
-                    leading: Icon(
-                      Icons.bluetooth,
-                      color: isHandspeaks ? Colors.green : Colors.blue,
-                    ),
-                    title: Text(
-                      device.name ?? "Unknown Device",
-                      style: TextStyle(
-                        fontWeight: isHandspeaks ? FontWeight.bold : FontWeight.normal,
-                      ),
-                    ),
-                    subtitle: Text(device.address),
-                    trailing: device.isBonded
-                        ? const Chip(label: Text("Paired", style: TextStyle(fontSize: 10)))
-                        : null,
-                    onTap: () => _manualConnect(device),
+                      return Card(
+                        margin: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 4,
+                        ),
+                        color: isHandspeaks ? Colors.green.shade50 : null,
+                        child: ListTile(
+                          leading: Icon(
+                            Icons.bluetooth,
+                            color: isHandspeaks ? Colors.green : Colors.blue,
+                          ),
+                          title: Text(
+                            device.name ?? "Unknown Device",
+                            style: TextStyle(
+                              fontWeight: isHandspeaks
+                                  ? FontWeight.bold
+                                  : FontWeight.normal,
+                            ),
+                          ),
+                          subtitle: Text(device.address),
+                          trailing: device.isBonded
+                              ? const Chip(
+                                  label: Text(
+                                    "Paired",
+                                    style: TextStyle(fontSize: 10),
+                                  ),
+                                )
+                              : null,
+                          onTap: () => _manualConnect(device),
+                        ),
+                      );
+                    },
                   ),
-                );
-              },
-            ),
           ),
         ],
       ),
@@ -231,7 +268,9 @@ class _ChatScreenState extends State<_ChatScreen> {
 
     try {
       // 💡 Try 1: Standard Connection (Keep this as primary attempt)
-      BluetoothConnection conn = await BluetoothConnection.toAddress(widget.device.address);
+      BluetoothConnection conn = await BluetoothConnection.toAddress(
+        widget.device.address,
+      );
       // OR: 💡 Try 2: Insecure Connection on Specific Channel (If Try 1 fails)
       // BluetoothConnection conn = await BluetoothConnection.toAddress(
       //     widget.device.address,
@@ -249,7 +288,6 @@ class _ChatScreenState extends State<_ChatScreen> {
       });
 
       // ... rest of input stream listener ...
-
     } catch (e) {
       setState(() {
         messages.add("*** Connection failed: $e ***");
@@ -258,11 +296,12 @@ class _ChatScreenState extends State<_ChatScreen> {
       });
     }
   }
+
   void _send() {
     if (connection == null || !connected) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Not connected!")),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text("Not connected!")));
       return;
     }
 
@@ -326,9 +365,7 @@ class _ChatScreenState extends State<_ChatScreen> {
             padding: const EdgeInsets.symmetric(vertical: 8),
             color: connected ? Colors.green.shade100 : Colors.red.shade100,
             child: Text(
-              connected
-                  ? "🟢 Receiving data from Pi..."
-                  : "🔴 Not connected",
+              connected ? "🟢 Receiving data from Pi..." : "🔴 Not connected",
               textAlign: TextAlign.center,
               style: const TextStyle(fontWeight: FontWeight.bold),
             ),
@@ -339,34 +376,39 @@ class _ChatScreenState extends State<_ChatScreen> {
             child: messages.isEmpty
                 ? const Center(child: Text("Waiting for data..."))
                 : ListView.builder(
-              controller: _scrollController,
-              itemCount: messages.length,
-              itemBuilder: (context, index) {
-                final msg = messages[index];
-                final isFromPi = msg.startsWith("📥");
-                final isSystem = msg.startsWith("***");
+                    controller: _scrollController,
+                    itemCount: messages.length,
+                    itemBuilder: (context, index) {
+                      final msg = messages[index];
+                      final isFromPi = msg.startsWith("📥");
+                      final isSystem = msg.startsWith("***");
 
-                return Container(
-                  margin: const EdgeInsets.symmetric(vertical: 2, horizontal: 8),
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: isSystem
-                        ? Colors.grey.shade200
-                        : isFromPi
-                        ? Colors.blue.shade50
-                        : Colors.green.shade50,
-                    borderRadius: BorderRadius.circular(8),
+                      return Container(
+                        margin: const EdgeInsets.symmetric(
+                          vertical: 2,
+                          horizontal: 8,
+                        ),
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: isSystem
+                              ? Colors.grey.shade200
+                              : isFromPi
+                              ? Colors.blue.shade50
+                              : Colors.green.shade50,
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Text(
+                          msg,
+                          style: TextStyle(
+                            fontStyle: isSystem
+                                ? FontStyle.italic
+                                : FontStyle.normal,
+                            fontSize: 13,
+                          ),
+                        ),
+                      );
+                    },
                   ),
-                  child: Text(
-                    msg,
-                    style: TextStyle(
-                      fontStyle: isSystem ? FontStyle.italic : FontStyle.normal,
-                      fontSize: 13,
-                    ),
-                  ),
-                );
-              },
-            ),
           ),
 
           // Input area
