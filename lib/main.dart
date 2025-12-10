@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
-import 'package:handspeaks/pages/HomePage.dart';
+import 'package:handspeaks/pages/Sign_to_abled/HomePage.dart';
+import 'package:handspeaks/pages/Selection_page.dart';
+import 'package:handspeaks/pages/Splash_page.dart';
 import 'package:handspeaks/theme/app_theme.dart';
 
 import 'bluetooth/bluetooth_handler.dart';
@@ -18,7 +20,7 @@ class MyApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       title: 'Flutter Demo',
       theme: AppTheme.lightTheme,
-        home: Homepage(),
+        home: SplashPage(),
     );
   }
 }

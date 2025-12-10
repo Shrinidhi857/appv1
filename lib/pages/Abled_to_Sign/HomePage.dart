@@ -3,10 +3,10 @@ import 'package:glass/glass.dart';
 import 'dart:ui';
 import 'package:google_fonts/google_fonts.dart';
 
-import '../tabs/illustration_tab.dart';
-import '../tabs/device_tab.dart';
-import '../tabs/home_tab.dart';
-import '../theme/app_colors.dart';
+import '../../tabs/illustration_tab.dart';
+import '../../tabs/device_tab.dart';
+import '../../tabs/home_tab.dart';
+import '../../theme/app_colors.dart';
 
 class Homepage extends StatefulWidget {
   const Homepage({Key? key}) : super(key: key);
@@ -102,15 +102,15 @@ class _HomepageState extends State<Homepage> with SingleTickerProviderStateMixin
                   fontFamily: "Urbanist",
                   fontWeight: FontWeight.w700,
                   fontSize: 25,
-                    color: AppColors.pureWhite,
+                  color: AppColors.pureWhite,
                 ),
               ),
               decoration: BoxDecoration(
-                borderRadius:BorderRadius.circular(10.0),
-                border: Border.all(
-                  width: 2.0,          // border thickness
-                ),
-                color: AppColors.pureBlack
+                  borderRadius:BorderRadius.circular(10.0),
+                  border: Border.all(
+                    width: 2.0,          // border thickness
+                  ),
+                  color: AppColors.pureBlack
               ),
             ),
           ],
