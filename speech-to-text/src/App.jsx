@@ -181,7 +181,7 @@ function App() {
                     {!apiKey ? (
                         <span className="status-waiting">Waiting for API key...</span>
                     ) : isRecording ? (
-                        <span className="status-recording">● Recording</span>
+                        <span className="status-recording">Recording</span>
                     ) : (
                         <span className="status-ready">Tap to start recording</span>
                     )}

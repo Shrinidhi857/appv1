@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:flutter/services.dart' show rootBundle;
 import 'dart:convert';
 import '../../theme/app_colors.dart';
 
@@ -70,10 +71,14 @@ class _SpeechToTextPageState extends State<SpeechToTextPage> {
           },
         );
 
-      // Load the local HTML file using loadRequest for better Android compatibility
-      // This ensures relative paths in HTML work correctly
-      final String htmlPath = await _getAssetFileUrl('assets/web/index.html');
-      await controller.loadRequest(Uri.parse(htmlPath));
+      // Load HTML content with proper base URL for Android
+      final String htmlContent = await rootBundle.loadString('assets/web/index.html');
+      final String baseUrl = 'file:///android_asset/flutter_assets/assets/web/';
+      
+      await controller.loadHtmlString(
+        htmlContent,
+        baseUrl: baseUrl,
+      );
       
       if (mounted) {
         setState(() {
@@ -88,12 +93,6 @@ class _SpeechToTextPageState extends State<SpeechToTextPage> {
         });
       }
     }
-  }
-
-  // Helper method to get proper file:// URL for assets
-  Future<String> _getAssetFileUrl(String assetPath) async {
-    // For Android, we need to use the flutter_assets path
-    return 'file:///android_asset/flutter_assets/$assetPath';
   }
 
   Future<void> _sendApiKeyToWebView() async {

@@ -7,24 +7,24 @@
 
 .mic-button {
     position: relative;
-    width: 120px;
-    height: 120px;
+    width: 140px;
+    height: 140px;
     border-radius: var(--radius-full);
     border: none;
-    background: var(--accent-green);
+    background: linear-gradient(135deg, #6FB5A8 0%, #5AA399 100%);
     color: var(--pure-white);
     cursor: pointer;
     display: flex;
     align-items: center;
     justify-content: center;
     transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-    box-shadow: 0 8px 24px rgba(0, 200, 83, 0.3);
+    box-shadow: 0 8px 24px rgba(111, 181, 168, 0.35);
     z-index: 1;
 }
 
 .mic-button:hover:not(.disabled) {
     transform: scale(1.05);
-    box-shadow: 0 12px 32px rgba(0, 200, 83, 0.4);
+    box-shadow: 0 12px 32px rgba(111, 181, 168, 0.45);
 }
 
 .mic-button:active:not(.disabled) {
@@ -32,13 +32,14 @@
 }
 
 .mic-button.disabled {
-    background: rgba(0, 0, 0, 0.2);
+    background: var(--bg-grey);
     cursor: not-allowed;
     box-shadow: none;
+    opacity: 0.5;
 }
 
 .mic-button.recording {
-    background: var(--accent-pink);
+    background: linear-gradient(135deg, #FF9B9B 0%, #FF8585 100%);
     box-shadow: 0 8px 24px rgba(255, 155, 155, 0.4);
     animation: pulse 2s ease-in-out infinite;
 }

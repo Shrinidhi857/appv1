@@ -45,12 +45,15 @@
 }
 
 .transcription-content {
-    min-height: 200px;
+    min-height: 220px;
     max-height: 400px;
     overflow-y: auto;
-    padding: var(--spacing-lg);
-    border-radius: var(--radius-lg);
+    padding: 20px;
+    border-radius: var(--radius-xl);
     box-shadow: var(--shadow-card);
+    background: rgba(255, 255, 255, 0.85);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
 }
 
 /* Empty State */
