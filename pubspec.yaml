@@ -39,8 +39,17 @@ dependencies:
   google_fonts: ^6.3.3
   glass: ^2.0.0+2
   flutter_bluetooth_serial: ^0.4.0
+<<<<<<< HEAD
   vosk_flutter: ^0.2.0
   
+=======
+  webview_flutter: ^4.4.2
+  flutter_secure_storage: ^9.0.0
+  
+  # 3D Model rendering (using WebView approach - compatible)
+  vector_math: ^2.1.4
+
+>>>>>>> main
 dev_dependencies:
   flutter_test:
     sdk: flutter
@@ -62,7 +71,16 @@ flutter:
 
   assets:
     - assets/
+<<<<<<< HEAD
     - assets/models/
+=======
+    - assets/models/breen.glb
+    - assets/textures/breen_face_2.png
+    - assets/textures/breen_sheet_4.png
+    - assets/textures/eyeball_l_3.png
+    - assets/textures/eyeball_r_0.png
+    - assets/textures/mouth_1.png
+>>>>>>> main
 
   fonts:
     - family: Urbanist
