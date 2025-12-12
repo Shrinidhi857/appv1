@@ -2,18 +2,16 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:webview_flutter/webview_flutter.dart';
-import 'package:vector_math/vector_math_64.dart' as vm;
+import '../landmark_bus.dart'; // Use shared landmark bus
+import '../bluetooth/landmark_receiver.dart'; // For data types
 
 /// WebView-based 3D GLB hand model viewer using Google Model Viewer
+/// Subscribes to landmarkBus to receive landmarks from RPi via device_tab
 class GlbHandMappingWidget extends StatefulWidget {
   final String modelAssetPath;
-  final Stream<List<vm.Vector3>> handLandmarksStream;
 
-  const GlbHandMappingWidget({
-    required this.modelAssetPath,
-    required this.handLandmarksStream,
-    Key? key,
-  }) : super(key: key);
+  const GlbHandMappingWidget({required this.modelAssetPath, Key? key})
+    : super(key: key);
 
   @override
   State<GlbHandMappingWidget> createState() => _GlbHandMappingWidgetState();
@@ -21,7 +19,7 @@ class GlbHandMappingWidget extends StatefulWidget {
 
 class _GlbHandMappingWidgetState extends State<GlbHandMappingWidget> {
   late final WebViewController _controller;
-  StreamSubscription<List<vm.Vector3>>? _landmarksSub;
+  StreamSubscription<LandmarkDataPacket>? _landmarksSub;
   bool _isReady = false;
   int _landmarkCount = 0;
 
@@ -55,10 +53,15 @@ class _GlbHandMappingWidgetState extends State<GlbHandMappingWidget> {
   }
 
   void _subscribeLandmarks() {
-    _landmarksSub = widget.handLandmarksStream.listen(
-      (landmarks) {
-        if (_isReady && landmarks.length >= 21) {
-          _sendLandmarksToWebView(landmarks);
+    // Subscribe to shared landmarkBus that receives data from device_tab
+    _landmarksSub = landmarkBus.stream.listen(
+      (packet) {
+        if (_isReady && packet.hands.isNotEmpty) {
+          // Use first hand's landmarks for 3D model actuation
+          final firstHand = packet.hands[0];
+          if (firstHand.landmarks.length >= 21) {
+            _sendLandmarksToWebView(firstHand.landmarks);
+          }
         }
       },
       onError: (error) {
@@ -67,9 +70,10 @@ class _GlbHandMappingWidgetState extends State<GlbHandMappingWidget> {
     );
   }
 
-  void _sendLandmarksToWebView(List<vm.Vector3> landmarks) {
+  void _sendLandmarksToWebView(List<HandLandmark> landmarks) {
+    // Convert HandLandmark objects to coordinate list for WebView
     final landmarksList = landmarks
-        .map((v) => {'x': v.x, 'y': v.y, 'z': v.z})
+        .map((landmark) => {'x': landmark.x, 'y': landmark.y, 'z': landmark.z})
         .toList();
 
     final message = jsonEncode({

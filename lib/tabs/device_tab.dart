@@ -1,11 +1,8 @@
 // lib/device_tab.dart
 import 'dart:async';
 import 'dart:convert';
-import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:glass/glass.dart';
-import 'package:google_fonts/google_fonts.dart';
-import 'package:web_socket_channel/web_socket_channel.dart';
 import 'package:http/http.dart' as http;
 import '../components/frostedglass.dart';
 import '../theme/app_colors.dart';
@@ -20,35 +17,24 @@ class DeviceTab extends StatefulWidget {
 
 class _DeviceTabState extends State<DeviceTab> {
   // <-- Change this to your RPi IP (single place)
-  static const String defaultRPI_IP = "192.168.1.100"; // <-- CHANGE THIS
-  static const int WS_PORT = 8765;
-  static const int HTTP_PORT = 5000; // change if your API uses different port
+  static const String defaultRPI_IP =
+      "192.168.1.100"; // <-- CHANGE THIS TO YOUR RPI IP
+  static const int API_PORT = 8000; // Your RPi landmark stream API port
 
-  WebSocketChannel? _channel;
-  StreamSubscription? _sub;
-  Timer? _pingTimer;
   Timer? _pollTimer;
 
-  // Mode toggle: true = WebSocket (recommended), false = HTTP polling
-  bool _useWebSocket = true;
-
   // UI / status
-  bool _isConnected =
-      false; // For WS mode: WS conn; For HTTP mode: polling running flag
+  bool _isConnected = false; // HTTP polling running flag
   bool _isReceiving = false;
   String _connectionStatus = "Not connected";
   String _connectedName = "RPi5";
 
-  // Device controls (kept same)
+  // Device controls
   bool _cameraEnabled = true;
   bool _speakerEnabled = true;
   bool _tofSensorEnabled = false;
   bool _microphoneEnabled = true;
   bool _ledEnabled = false;
-
-  // Data from device (telemetry)
-  String _batteryLevel = "87%";
-  String _latency = "42 ms";
   final List<String> _receivedMessages = [];
 
   final TextEditingController _ipController = TextEditingController(
@@ -62,238 +48,51 @@ class _DeviceTabState extends State<DeviceTab> {
 
   @override
   void dispose() {
-    _stopPing();
     _stopPolling();
-    _sub?.cancel();
-    _closeChannel();
     _ipController.dispose();
     super.dispose();
   }
 
   // -----------------------
-  // Mode control
-  // -----------------------
-  void _setMode(bool useWs) {
-    if (_useWebSocket == useWs) return;
-    // stop running mode
-    if (_isConnected) {
-      if (_useWebSocket)
-        _disconnectWS();
-      else
-        _stopPolling();
-    }
-    setState(() {
-      _useWebSocket = useWs;
-      _connectionStatus =
-          "Switched to ${_useWebSocket ? 'WebSocket' : 'HTTP polling'}";
-    });
-  }
-
-  // -----------------------
-  // Connect / Disconnect
+  // Connect / Disconnect (HTTP only)
   // -----------------------
   void _connect() {
-    if (_useWebSocket) {
-      _connectWS();
-    } else {
-      _startPolling();
-    }
+    _startPolling();
   }
 
   void _disconnect() {
-    if (_useWebSocket) {
-      _disconnectWS();
-    } else {
-      _stopPolling();
-    }
+    _stopPolling();
   }
 
   // -----------------------
-  // WebSocket implementation
-  // -----------------------
-  void _connectWS() {
-    final ip = _ipController.text.trim();
-    final uri = Uri.parse("ws://$ip:$WS_PORT");
-
-    setState(() {
-      _connectionStatus = "Connecting (WS) to $ip:$WS_PORT ...";
-    });
-
-    try {
-      _channel = WebSocketChannel.connect(uri);
-      _sub = _channel!.stream.listen(
-        _onWSMessage,
-        onError: _onWSError,
-        onDone: _onWSDone,
-        cancelOnError: true,
-      );
-
-      setState(() {
-        _isConnected = true;
-        _connectionStatus = "Connected via WS to $ip";
-        _connectedName = "RPi5 @ $ip";
-      });
-
-      _startPing();
-    } catch (e) {
-      setState(() {
-        _isConnected = false;
-        _connectionStatus = "WS connect failed: $e";
-      });
-      _closeChannel();
-    }
-  }
-
-  void _disconnectWS() {
-    _stopPing();
-    try {
-      _sub?.cancel();
-    } catch (_) {}
-    _closeChannel();
-    setState(() {
-      _isConnected = false;
-      _connectionStatus = "Disconnected (WS)";
-      _isReceiving = false;
-    });
-  }
-
-  void _closeChannel() {
-    try {
-      _channel?.sink.close();
-    } catch (_) {}
-    _channel = null;
-  }
-
-  void _onWSMessage(dynamic raw) {
-    try {
-      if (raw == null) return;
-      final String text = raw is String ? raw : utf8.decode(raw as Uint8List);
-      debugPrint("WS In: $text");
-      final Map<String, dynamic> data = json.decode(text);
-      final String? type = data['type']?.toString();
-      final payload = data['payload'];
-
-      if (type == null) return;
-
-      switch (type) {
-        case 'WELCOME':
-          setState(
-            () => _connectionStatus =
-                payload?['message']?.toString() ?? _connectionStatus,
-          );
-          break;
-        case 'STATUS':
-          setState(() {
-            _isReceiving = payload is Map && payload['streaming'] == true;
-            _connectionStatus =
-                payload?['message']?.toString() ?? _connectionStatus;
-          });
-          break;
-        case 'LANDMARKS':
-          if (payload is Map<String, dynamic>) {
-            // publish into shared bus
-            landmarkBus.processPayload(Map<String, dynamic>.from(payload));
-            setState(() => _isReceiving = true);
-          }
-          break;
-        case 'TELEMETRY':
-          if (payload is Map) {
-            if (payload.containsKey('battery'))
-              _batteryLevel = payload['battery'].toString();
-            if (payload.containsKey('latency'))
-              _latency = payload['latency'].toString();
-            setState(() {});
-          }
-          break;
-        case 'PONG':
-          // ignore
-          break;
-        default:
-          setState(() => _receivedMessages.add(text));
-      }
-    } catch (e) {
-      debugPrint("WS parse error: $e");
-    }
-  }
-
-  void _onWSError(Object e) {
-    debugPrint("WS Error: $e");
-    _stopPing();
-    _closeChannel();
-    setState(() {
-      _isConnected = false;
-      _connectionStatus = "WS error";
-      _isReceiving = false;
-    });
-  }
-
-  void _onWSDone() {
-    debugPrint("WS Done");
-    _stopPing();
-    _closeChannel();
-    setState(() {
-      _isConnected = false;
-      _connectionStatus = "WS connection closed";
-      _isReceiving = false;
-    });
-  }
-
-  void _startPing({Duration interval = const Duration(seconds: 10)}) {
-    _stopPing();
-    _pingTimer = Timer.periodic(interval, (_) {
-      if (_channel != null) {
-        try {
-          _channel!.sink.add(
-            json.encode({
-              "type": "PING",
-              "payload": DateTime.now().toIso8601String(),
-            }),
-          );
-        } catch (e) {
-          debugPrint("Ping error: $e");
-        }
-      }
-    });
-  }
-
-  void _stopPing() {
-    _pingTimer?.cancel();
-    _pingTimer = null;
-  }
-
-  // -----------------------
-  // HTTP Polling implementation (fallback)
+  // HTTP Polling implementation (RPi API on port 5555)
   // -----------------------
   void _startPolling({Duration interval = const Duration(milliseconds: 250)}) {
     final ip = _ipController.text.trim();
     setState(() {
-      _connectionStatus = "Starting HTTP polling to $ip:$HTTP_PORT";
+      _connectionStatus = "Starting HTTP polling to $ip:$API_PORT";
       _isConnected = true;
     });
 
     _pollTimer = Timer.periodic(interval, (_) async {
       try {
-        final url = Uri.parse(
-          'http://$ip:$HTTP_PORT/landmarks',
-        ); // expected endpoint
+        final url = Uri.parse('http://$ip:$API_PORT/landmarks');
         final resp = await http.get(url).timeout(const Duration(seconds: 2));
         if (resp.statusCode == 200) {
           final Map<String, dynamic> payload = json.decode(resp.body);
-          // publish to bus:
+          // Publish landmarks to shared bus for 3D visualization
           landmarkBus.processPayload(payload);
           setState(() {
             _isReceiving = true;
-            _connectionStatus =
-                "Polling: last ${DateTime.now().toIso8601String()}";
+            _connectionStatus = "✓ Receiving landmarks from RPi";
           });
         } else {
-          debugPrint("Polling HTTP status: ${resp.statusCode}");
+          debugPrint("HTTP status: ${resp.statusCode}");
         }
       } catch (e) {
         debugPrint("Polling error: $e");
-        // don't set disconnected - we want polling to keep retrying
         setState(() {
-          _connectionStatus = "Polling error: $e";
+          _connectionStatus = "Retrying connection...";
         });
       }
     });
@@ -310,52 +109,33 @@ class _DeviceTabState extends State<DeviceTab> {
   }
 
   // -----------------------
-  // Send command (works in both modes)
+  // Send command to RPi via HTTP POST
   // -----------------------
   void _sendCommand(String command) {
-    if (_useWebSocket) {
-      if (_channel == null) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text("WS not connected")));
-        return;
-      }
-      try {
-        _channel!.sink.add(
-          json.encode({'type': 'COMMAND', 'payload': command}),
-        );
-      } catch (e) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text("Send error: $e")));
-      }
-    } else {
-      // HTTP-mode: send command to REST endpoint
-      final ip = _ipController.text.trim();
-      final url = Uri.parse('http://$ip:$HTTP_PORT/command');
-      http
-          .post(
-            url,
-            body: json.encode({'command': command}),
-            headers: {'Content-Type': 'application/json'},
-          )
-          .then((resp) {
-            if (resp.statusCode == 200) {
-              ScaffoldMessenger.of(
-                context,
-              ).showSnackBar(const SnackBar(content: Text("Command sent")));
-            } else {
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text("Command error: ${resp.statusCode}")),
-              );
-            }
-          })
-          .catchError((e) {
-            ScaffoldMessenger.of(
-              context,
-            ).showSnackBar(SnackBar(content: Text("Command send failed: $e")));
-          });
-    }
+    final ip = _ipController.text.trim();
+    final url = Uri.parse('http://$ip:$API_PORT/command');
+    http
+        .post(
+          url,
+          body: json.encode({'command': command}),
+          headers: {'Content-Type': 'application/json'},
+        )
+        .then((resp) {
+          if (resp.statusCode == 200) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text("✓ Command sent to RPi")),
+            );
+          } else {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text("Command error: ${resp.statusCode}")),
+            );
+          }
+        })
+        .catchError((e) {
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(SnackBar(content: Text("Command send failed: $e")));
+        });
   }
 
   // -----------------------
@@ -436,40 +216,7 @@ class _DeviceTabState extends State<DeviceTab> {
                       ),
                     ),
                   ),
-                  const SizedBox(height: 12),
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16.0),
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: ElevatedButton.icon(
-                            onPressed: () => _setMode(true),
-                            icon: const Icon(Icons.wifi),
-                            label: const Text('Use WebSocket'),
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: _useWebSocket
-                                  ? Colors.blueAccent
-                                  : Colors.grey,
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: ElevatedButton.icon(
-                            onPressed: () => _setMode(false),
-                            icon: const Icon(Icons.http),
-                            label: const Text('Use HTTP Polling'),
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: !_useWebSocket
-                                  ? Colors.blueAccent
-                                  : Colors.grey,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 12),
+                  const SizedBox(height: 16),
                   Row(
                     children: [
                       Expanded(
