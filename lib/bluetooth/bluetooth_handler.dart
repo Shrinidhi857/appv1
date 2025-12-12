@@ -1,10 +1,12 @@
+// File: bluetooth_handler.dart
+// NOTE: This used to be Bluetooth. It now connects over WebSocket (Wi-Fi).
+import 'dart:async';
 import 'dart:convert';
-import 'dart:typed_data';
 import 'package:flutter/material.dart';
-import 'package:flutter_bluetooth_serial/flutter_bluetooth_serial.dart';
+import 'package:web_socket_channel/web_socket_channel.dart';
+import '../landmark_bus.dart';
 import 'landmark_receiver.dart';
 
-/// Enhanced Bluetooth Page with auto-connect to "Handspeaks"
 class BluetoothPage extends StatefulWidget {
   const BluetoothPage({super.key});
   @override
@@ -12,446 +14,331 @@ class BluetoothPage extends StatefulWidget {
 }
 
 class _BluetoothPageState extends State<BluetoothPage> {
-  final FlutterBluetoothSerial _bluetooth = FlutterBluetoothSerial.instance;
-  List<BluetoothDevice> devices = [];
-  bool scanning = false;
-  bool autoConnecting = false;
-  String status = "Initializing...";
+  // Keep name for compatibility, but replace IP below in device_tab instead if you prefer
+  static const String defaultRPI_IP =
+      "10.100.169.47"; // you can change here (or use device_tab)
+  static const int RPI_PORT = 8000;
 
-  @override
-  void initState() {
-    super.initState();
-    _initializeBluetooth();
-  }
+  WebSocketChannel? _channel;
+  StreamSubscription? _sub;
+  Timer? _pingTimer;
 
-  /* ---------------------------------------------------------- */
-  /* INITIALIZATION & AUTO-CONNECT                              */
-  /* ---------------------------------------------------------- */
-  void _initializeBluetooth() async {
-    // Check if Bluetooth is enabled
-    bool? isEnabled = await _bluetooth.isEnabled;
-    if (isEnabled == null || !isEnabled) {
-      setState(() => status = "Bluetooth is OFF. Please enable it.");
-      // Request to enable Bluetooth
-      await _bluetooth.requestEnable();
-    }
+  bool _isConnected = false;
+  bool _isStreaming = false;
+  String _status = "Disconnected";
+  final TextEditingController _ipController = TextEditingController(
+    text: defaultRPI_IP,
+  );
 
-    // Start discovery and look for "Handspeaks"
-    _startDiscoveryAndAutoConnect();
-  }
-
-  void _startDiscoveryAndAutoConnect() async {
-    setState(() {
-      scanning = true;
-      status = "Scanning for Handspeaks...";
-      devices.clear();
-    });
-
-    var subscription = _bluetooth.startDiscovery();
-
-    subscription
-        .listen((result) {
-          final device = result.device;
-
-          // Add to list if not already present
-          if (!devices.any((d) => d.address == device.address)) {
-            setState(() => devices.add(device));
-          }
-
-          // Auto-connect to "Handspeaks" when found
-          if (!autoConnecting &&
-              device.name != null &&
-              device.name!.toLowerCase().contains('handspeaks')) {
-            setState(() => autoConnecting = true);
-            _autoConnectToDevice(device);
-          }
-        })
-        .onDone(() {
-          setState(() {
-            scanning = false;
-            if (!autoConnecting) {
-              status = devices.isEmpty
-                  ? "No devices found. Pull to refresh."
-                  : "Scan complete. Tap device to connect.";
-            }
-          });
-        });
-  }
-
-  // File: bluetooth_page.dart (Inside _BluetoothPageState)
-
-  // File: bluetooth_page.dart (Inside _BluetoothPageState)
-
-  void _autoConnectToDevice(BluetoothDevice device) async {
-    // 🛑 FIX A: Stop scanning before attempting to connect
-    try {
-      await _bluetooth.cancelDiscovery();
-      setState(() => scanning = false);
-    } catch (e) {
-      print("Warning: Failed to cancel discovery: $e");
-    }
-
-    setState(() => status = "Found Handspeaks! Connecting...");
-
-    if (!device.isBonded) {
-      await FlutterBluetoothSerial.instance.bondDeviceAtAddress(device.address);
-    }
-
-    // Navigate to Landmark Receiver Screen
-    Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => LandmarkDataScreen(device: device)),
-    );
-  }
-
-  void _manualConnect(BluetoothDevice device) async {
-    // 🛑 FIX B: Stop scanning for manual connect too
-    try {
-      await _bluetooth.cancelDiscovery();
-    } catch (e) {
-      print("Warning: Failed to cancel discovery for manual connect: $e");
-    }
-
-    if (!device.isBonded) {
-      await FlutterBluetoothSerial.instance.bondDeviceAtAddress(device.address);
-    }
-
-    // Navigate to Landmark Receiver Screen
-    Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => LandmarkDataScreen(device: device)),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Handspeaks Connector'),
-        actions: [
-          if (scanning)
-            const Padding(
-              padding: EdgeInsets.all(16.0),
-              child: SizedBox(
-                width: 20,
-                height: 20,
-                child: CircularProgressIndicator(
-                  color: Colors.white,
-                  strokeWidth: 2,
-                ),
-              ),
-            ),
-        ],
-      ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: scanning ? null : _startDiscoveryAndAutoConnect,
-        child: const Icon(Icons.refresh),
-      ),
-      body: Column(
-        children: [
-          // Status banner
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.all(16),
-            color: autoConnecting ? Colors.green.shade100 : Colors.blue.shade50,
-            child: Row(
-              children: [
-                if (autoConnecting || scanning)
-                  const Padding(
-                    padding: EdgeInsets.only(right: 12.0),
-                    child: SizedBox(
-                      width: 16,
-                      height: 16,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    ),
-                  ),
-                Expanded(
-                  child: Text(status, style: const TextStyle(fontSize: 14)),
-                ),
-              ],
-            ),
-          ),
-
-          // Device list
-          Expanded(
-            child: devices.isEmpty
-                ? Center(
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        const Icon(
-                          Icons.bluetooth_searching,
-                          size: 64,
-                          color: Colors.grey,
-                        ),
-                        const SizedBox(height: 16),
-                        Text(
-                          status,
-                          style: const TextStyle(color: Colors.grey),
-                        ),
-                      ],
-                    ),
-                  )
-                : ListView.builder(
-                    itemCount: devices.length,
-                    itemBuilder: (context, index) {
-                      final device = devices[index];
-                      final isHandspeaks =
-                          device.name != null &&
-                          device.name!.toLowerCase().contains('handspeaks');
-
-                      return Card(
-                        margin: const EdgeInsets.symmetric(
-                          horizontal: 8,
-                          vertical: 4,
-                        ),
-                        color: isHandspeaks ? Colors.green.shade50 : null,
-                        child: ListTile(
-                          leading: Icon(
-                            Icons.bluetooth,
-                            color: isHandspeaks ? Colors.green : Colors.blue,
-                          ),
-                          title: Text(
-                            device.name ?? "Unknown Device",
-                            style: TextStyle(
-                              fontWeight: isHandspeaks
-                                  ? FontWeight.bold
-                                  : FontWeight.normal,
-                            ),
-                          ),
-                          subtitle: Text(device.address),
-                          trailing: device.isBonded
-                              ? const Chip(
-                                  label: Text(
-                                    "Paired",
-                                    style: TextStyle(fontSize: 10),
-                                  ),
-                                )
-                              : null,
-                          onTap: () => _manualConnect(device),
-                        ),
-                      );
-                    },
-                  ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-/* ============================================================ */
-/* CHAT SCREEN – Receives data from Pi continuously            */
-/* ============================================================ */
-class _ChatScreen extends StatefulWidget {
-  final BluetoothDevice device;
-  const _ChatScreen({required this.device});
-  @override
-  State<_ChatScreen> createState() => _ChatScreenState();
-}
-
-class _ChatScreenState extends State<_ChatScreen> {
-  BluetoothConnection? connection;
-  final List<String> messages = [];
-  final TextEditingController _tec = TextEditingController();
-  bool connected = false;
-  String connectionStatus = "Connecting...";
-
-  @override
-  void initState() {
-    super.initState();
-    _connect();
-  }
-
-  // File: bluetooth_page.dart (Inside _ChatScreenState)
-
-  void _connect() async {
-    setState(() => connectionStatus = "Connecting to ${widget.device.name}...");
-
-    try {
-      // 💡 Try 1: Standard Connection (Keep this as primary attempt)
-      BluetoothConnection conn = await BluetoothConnection.toAddress(
-        widget.device.address,
-      );
-      // OR: 💡 Try 2: Insecure Connection on Specific Channel (If Try 1 fails)
-      // BluetoothConnection conn = await BluetoothConnection.toAddress(
-      //     widget.device.address,
-      //     secure: false, // Forcing insecure connection
-      //     channel: 22    // Match the channel used by the Pi script
-      // );
-
-      // ... rest of success logic ...
-
-      setState(() {
-        connection = conn;
-        connected = true;
-        connectionStatus = "Connected ✓";
-        messages.add("*** Connected to ${widget.device.name} ***");
-      });
-
-      // ... rest of input stream listener ...
-    } catch (e) {
-      setState(() {
-        messages.add("*** Connection failed: $e ***");
-        connectionStatus = "Failed to connect";
-        // This is the error point from your screenshot!
-      });
-    }
-  }
-
-  void _send() {
-    if (connection == null || !connected) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text("Not connected!")));
-      return;
-    }
-
-    final txt = _tec.text.trim();
-    if (txt.isEmpty) return;
-
-    _tec.clear();
-
-    try {
-      connection!.output.add(Uint8List.fromList(utf8.encode("$txt\n")));
-      setState(() => messages.add("📤 Me: $txt"));
-      _scrollToBottom();
-    } catch (e) {
-      setState(() => messages.add("*** Send error: $e ***"));
-    }
-  }
-
-  final ScrollController _scrollController = ScrollController();
-
-  void _scrollToBottom() {
-    if (_scrollController.hasClients) {
-      _scrollController.animateTo(
-        _scrollController.position.maxScrollExtent,
-        duration: const Duration(milliseconds: 300),
-        curve: Curves.easeOut,
-      );
-    }
-  }
+  // Local receiver for this widget's UI
+  final LandmarkReceiver _receiver = LandmarkReceiver();
 
   @override
   void dispose() {
-    connection?.dispose();
-    _scrollController.dispose();
-    _tec.dispose();
+    _stopPing();
+    _sub?.cancel();
+    try {
+      _channel?.sink.close();
+    } catch (_) {}
+    _ipController.dispose();
+    _receiver.dispose();
     super.dispose();
   }
 
+  void _connect() {
+    final ip = _ipController.text.trim();
+    final uri = Uri.parse("ws://$ip:$RPI_PORT");
+
+    try {
+      _channel = WebSocketChannel.connect(uri);
+      _sub = _channel!.stream.listen(
+        _onMessage,
+        onError: _onError,
+        onDone: _onDone,
+        cancelOnError: true,
+      );
+
+      setState(() {
+        _isConnected = true;
+        _status = "Connected to $ip";
+      });
+
+      _startPing();
+    } catch (e) {
+      setState(() {
+        _isConnected = false;
+        _status = "Connect failed: $e";
+      });
+      try {
+        _channel?.sink.close();
+      } catch (_) {}
+      _channel = null;
+    }
+  }
+
+  void _disconnect() {
+    _stopPing();
+    _sub?.cancel();
+    try {
+      _channel?.sink.close();
+    } catch (_) {}
+    _channel = null;
+
+    setState(() {
+      _isConnected = false;
+      _isStreaming = false;
+      _status = "Disconnected";
+    });
+    _receiver.clear();
+    landmarkBus.clear();
+  }
+
+  void _sendCommand(String cmd) {
+    if (_channel == null) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text("Not connected")));
+      return;
+    }
+    try {
+      _channel!.sink.add(json.encode({"type": "COMMAND", "payload": cmd}));
+    } catch (e) {
+      debugPrint("SendCommand error: $e");
+    }
+  }
+
+  void _onMessage(dynamic raw) {
+    try {
+      if (raw == null) return;
+      final String text = raw is String ? raw : utf8.decode(raw as List<int>);
+      final Map<String, dynamic> msg = json.decode(text);
+      final String? type = msg['type']?.toString();
+      final dynamic payload = msg['payload'];
+
+      switch (type) {
+        case 'WELCOME':
+          setState(() {
+            _status = payload?['message']?.toString() ?? "Welcome";
+          });
+          break;
+        case 'STATUS':
+          setState(() {
+            _isStreaming = payload is Map && payload['streaming'] == true;
+            _status = payload?['message']?.toString() ?? _status;
+          });
+          break;
+        case 'LANDMARKS':
+          if (payload is Map<String, dynamic>) {
+            // Process locally for this widget's UI
+            _receiver.processPayload(Map<String, dynamic>.from(payload));
+            // Also publish to the shared bus for other tabs
+            landmarkBus.processPayload(Map<String, dynamic>.from(payload));
+            setState(() {
+              _isStreaming = true;
+              _status = "Receiving landmarks";
+            });
+          }
+          break;
+        case 'PONG':
+          // ignore / keepalive ack
+          break;
+        default:
+          // optional telemetry or messages
+          debugPrint("Unknown message type: $type");
+      }
+    } catch (e) {
+      debugPrint('onMessage parse error: $e');
+    }
+  }
+
+  void _onError(Object err) {
+    debugPrint('WebSocket error: $err');
+    _stopPing();
+    setState(() {
+      _isConnected = false;
+      _isStreaming = false;
+      _status = 'Connection error';
+    });
+  }
+
+  void _onDone() {
+    debugPrint('WebSocket done');
+    _stopPing();
+    setState(() {
+      _isConnected = false;
+      _isStreaming = false;
+      _status = 'Connection closed';
+    });
+  }
+
+  void _startPing({Duration interval = const Duration(seconds: 10)}) {
+    _stopPing();
+    _pingTimer = Timer.periodic(interval, (_) {
+      if (_channel != null) {
+        try {
+          _channel!.sink.add(
+            json.encode({
+              "type": "PING",
+              "payload": DateTime.now().toIso8601String(),
+            }),
+          );
+        } catch (e) {
+          debugPrint("Ping error: $e");
+        }
+      }
+    });
+  }
+
+  void _stopPing() {
+    _pingTimer?.cancel();
+    _pingTimer = null;
+  }
+
+  // UI - minimal; reuse your app's styling where needed
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text(widget.device.name ?? "Raspberry Pi"),
-        backgroundColor: connected ? Colors.green : Colors.grey,
-        actions: [
-          Padding(
-            padding: const EdgeInsets.all(16.0),
-            child: Center(
-              child: Text(
-                connectionStatus,
-                style: const TextStyle(fontSize: 12),
-              ),
-            ),
-          ),
-        ],
+        title: const Text('HandSpeaks Wi-Fi Control'),
+        backgroundColor: Colors.blue[900],
       ),
-      body: Column(
-        children: [
-          // Connection indicator
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.symmetric(vertical: 8),
-            color: connected ? Colors.green.shade100 : Colors.red.shade100,
-            child: Text(
-              connected ? "🟢 Receiving data from Pi..." : "🔴 Not connected",
-              textAlign: TextAlign.center,
-              style: const TextStyle(fontWeight: FontWeight.bold),
-            ),
-          ),
-
-          // Messages
-          Expanded(
-            child: messages.isEmpty
-                ? const Center(child: Text("Waiting for data..."))
-                : ListView.builder(
-                    controller: _scrollController,
-                    itemCount: messages.length,
-                    itemBuilder: (context, index) {
-                      final msg = messages[index];
-                      final isFromPi = msg.startsWith("📥");
-                      final isSystem = msg.startsWith("***");
-
-                      return Container(
-                        margin: const EdgeInsets.symmetric(
-                          vertical: 2,
-                          horizontal: 8,
-                        ),
-                        padding: const EdgeInsets.all(8),
-                        decoration: BoxDecoration(
-                          color: isSystem
-                              ? Colors.grey.shade200
-                              : isFromPi
-                              ? Colors.blue.shade50
-                              : Colors.green.shade50,
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: Text(
-                          msg,
-                          style: TextStyle(
-                            fontStyle: isSystem
-                                ? FontStyle.italic
-                                : FontStyle.normal,
-                            fontSize: 13,
-                          ),
-                        ),
-                      );
-                    },
-                  ),
-          ),
-
-          // Input area
-          Container(
-            padding: const EdgeInsets.all(8.0),
-            decoration: BoxDecoration(
-              color: Colors.grey.shade100,
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withOpacity(0.1),
-                  blurRadius: 4,
-                  offset: const Offset(0, -2),
-                ),
-              ],
-            ),
-            child: Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _tec,
-                    decoration: InputDecoration(
-                      hintText: "Send message to Pi",
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(24),
-                      ),
-                      contentPadding: const EdgeInsets.symmetric(
-                        horizontal: 16,
-                        vertical: 8,
+      body: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          children: [
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(12.0),
+                child: Column(
+                  children: [
+                    const Text(
+                      'RPi5 Connection',
+                      style: TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: _ipController,
+                      decoration: const InputDecoration(
+                        labelText: 'RPi5 IP Address',
+                        hintText: '10.100.169.47',
+                        border: OutlineInputBorder(),
                       ),
                     ),
-                    onSubmitted: (_) => _send(),
-                  ),
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: ElevatedButton.icon(
+                            onPressed: _isConnected ? null : _connect,
+                            icon: const Icon(Icons.link),
+                            label: const Text('Connect'),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.green,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: ElevatedButton.icon(
+                            onPressed: _isConnected ? _disconnect : null,
+                            icon: const Icon(Icons.link_off),
+                            label: const Text('Disconnect'),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.red,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
                 ),
-                const SizedBox(width: 8),
-                FloatingActionButton(
-                  mini: true,
-                  onPressed: connected ? _send : null,
-                  child: const Icon(Icons.send),
-                ),
-              ],
+              ),
             ),
-          ),
-        ],
+
+            const SizedBox(height: 12),
+
+            Card(
+              color: _isConnected ? Colors.green[900] : Colors.red[900],
+              child: Padding(
+                padding: const EdgeInsets.all(12.0),
+                child: Row(
+                  children: [
+                    Icon(
+                      _isConnected ? Icons.check_circle : Icons.error,
+                      color: Colors.white,
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        _status,
+                        style: const TextStyle(color: Colors.white),
+                      ),
+                    ),
+                    if (_isConnected)
+                      Padding(
+                        padding: const EdgeInsets.only(left: 8.0),
+                        child: ElevatedButton(
+                          onPressed: () => _sendCommand('start'),
+                          child: const Text('Start'),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.green,
+                          ),
+                        ),
+                      ),
+                    if (_isConnected) const SizedBox(width: 8),
+                    if (_isConnected)
+                      ElevatedButton(
+                        onPressed: () => _sendCommand('stop'),
+                        child: const Text('Stop'),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.red,
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+
+            const SizedBox(height: 12),
+
+            Expanded(
+              child: StreamBuilder<LandmarkDataPacket>(
+                stream: landmarkBus.stream,
+                builder: (context, snap) {
+                  if (!snap.hasData) {
+                    return Center(
+                      child: Text(
+                        _isConnected
+                            ? 'Press START to stream'
+                            : 'Connect to RPi5',
+                      ),
+                    );
+                  }
+                  final packet = snap.data!;
+                  return ListView(
+                    padding: const EdgeInsets.all(8),
+                    children: [
+                      Text('Timestamp: ${packet.timestamp}'),
+                      Text('Hands detected: ${packet.handsCount}'),
+                      const SizedBox(height: 8),
+                      ...packet.hands.asMap().entries.map((entry) {
+                        final idx = entry.key;
+                        final hand = entry.value;
+                        return ListTile(
+                          leading: const Icon(Icons.back_hand),
+                          title: Text('Hand ${idx + 1}: ${hand.label}'),
+                          subtitle: Text(
+                            '${hand.landmarks.length} landmarks • conf ${hand.confidence.toStringAsFixed(2)}',
+                          ),
+                        );
+                      }).toList(),
+                    ],
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

@@ -1,20 +1,22 @@
+// File: landmark_receiver.dart
+import 'dart:async';
 import 'dart:convert';
-import 'dart:typed_data';
 import 'package:flutter/material.dart';
-import 'package:flutter_bluetooth_serial/flutter_bluetooth_serial.dart';
 
-/// Model for Hand Landmark Data
+/// Models for hand landmark data (kept from original)
 class HandLandmark {
   final double x, y, z;
   HandLandmark({required this.x, required this.y, required this.z});
 
   factory HandLandmark.fromJson(Map<String, dynamic> json) {
     return HandLandmark(
-      x: json['x'].toDouble(),
-      y: json['y'].toDouble(),
-      z: json['z'].toDouble(),
+      x: (json['x'] ?? 0).toDouble(),
+      y: (json['y'] ?? 0).toDouble(),
+      z: (json['z'] ?? 0).toDouble(),
     );
   }
+
+  Map<String, dynamic> toJson() => {'x': x, 'y': y, 'z': z};
 }
 
 class HandFeatures {
@@ -30,9 +32,9 @@ class HandFeatures {
 
   factory HandFeatures.fromJson(Map<String, dynamic> json) {
     return HandFeatures(
-      thumbDistance: json['thumb_distance'].toDouble(),
-      indexDistance: json['index_distance'].toDouble(),
-      handSize: json['hand_size'].toDouble(),
+      thumbDistance: (json['thumb_distance'] ?? 0).toDouble(),
+      indexDistance: (json['index_distance'] ?? 0).toDouble(),
+      handSize: (json['hand_size'] ?? 0).toDouble(),
     );
   }
 }
@@ -42,30 +44,62 @@ class HandData {
   final String label;
   final double confidence;
   final List<HandLandmark> landmarks;
-  final HandFeatures features;
+  final HandFeatures? features;
 
   HandData({
     required this.handIndex,
     required this.label,
     required this.confidence,
     required this.landmarks,
-    required this.features,
+    this.features,
   });
 
   factory HandData.fromJson(Map<String, dynamic> json) {
-    var landmarksList = json['landmarks'] as List;
+    var landmarksList = (json['landmarks'] as List?) ?? [];
     List<HandLandmark> landmarksData = landmarksList
-        .map((landmark) => HandLandmark.fromJson(landmark))
+        .map((landmark) {
+          if (landmark is List && landmark.length >= 3) {
+            // sometimes landmarks can be arrays [x,y,z]
+            return HandLandmark(
+                x: (landmark[0] ?? 0).toDouble(),
+                y: (landmark[1] ?? 0).toDouble(),
+                z: (landmark[2] ?? 0).toDouble());
+          } else if (landmark is Map) {
+            return HandLandmark.fromJson(Map<String, dynamic>.from(landmark));
+          } else {
+            return HandLandmark(x: 0, y: 0, z: 0);
+          }
+        })
+        .cast<HandLandmark>()
         .toList();
 
+    HandFeatures? features;
+    if (json.containsKey('features') && json['features'] is Map) {
+      features = HandFeatures.fromJson(Map<String, dynamic>.from(json['features']));
+    }
+
     return HandData(
-      handIndex: json['hand_index'],
-      label: json['label'],
-      confidence: json['confidence'].toDouble(),
+      handIndex: (json['hand_index'] ?? 0) is int ? json['hand_index'] : int.tryParse((json['hand_index'] ?? '0').toString()) ?? 0,
+      label: (json['label'] ?? '').toString(),
+      confidence: (json['confidence'] ?? 0).toDouble(),
       landmarks: landmarksData,
-      features: HandFeatures.fromJson(json['features']),
+      features: features,
     );
   }
+
+  Map<String, dynamic> toJson() => {
+        'hand_index': handIndex,
+        'label': label,
+        'confidence': confidence,
+        'landmarks': landmarks.map((e) => e.toJson()).toList(),
+        'features': features == null
+            ? null
+            : {
+                'thumb_distance': features!.thumbDistance,
+                'index_distance': features!.indexDistance,
+                'hand_size': features!.handSize,
+              },
+      };
 }
 
 class LandmarkDataPacket {
@@ -80,360 +114,49 @@ class LandmarkDataPacket {
   });
 
   factory LandmarkDataPacket.fromJson(Map<String, dynamic> json) {
-    var handsList = json['hands'] as List;
+    var handsList = (json['hands'] as List?) ?? [];
     List<HandData> hands = handsList
-        .map((hand) => HandData.fromJson(hand))
+        .map((hand) => HandData.fromJson(Map<String, dynamic>.from(hand)))
         .toList();
 
     return LandmarkDataPacket(
-      timestamp: json['timestamp'].toDouble(),
-      handsCount: json['hands_count'],
+      timestamp: (json['timestamp'] ?? 0).toDouble(),
+      handsCount: (json['hands_count'] ?? hands.length) is int ? (json['hands_count'] ?? hands.length) : int.tryParse((json['hands_count'] ?? hands.length).toString()) ?? hands.length,
       hands: hands,
     );
   }
+
+  Map<String, dynamic> toJson() => {
+        'timestamp': timestamp,
+        'hands_count': handsCount,
+        'hands': hands.map((h) => h.toJson()).toList(),
+      };
 }
 
-/// Landmark Data Screen - Visualizes received hand landmarks
-class LandmarkDataScreen extends StatefulWidget {
-  final BluetoothDevice device;
-  const LandmarkDataScreen({super.key, required this.device});
+/// LandmarkReceiver: accepts payloads (Map) and emits a broadcast stream
+class LandmarkReceiver {
+  final StreamController<LandmarkDataPacket> _ctrl = StreamController<LandmarkDataPacket>.broadcast();
 
-  @override
-  State<LandmarkDataScreen> createState() => _LandmarkDataScreenState();
-}
+  Stream<LandmarkDataPacket> get stream => _ctrl.stream;
 
-class _LandmarkDataScreenState extends State<LandmarkDataScreen> {
-  BluetoothConnection? connection;
-  bool connected = false;
-  String connectionStatus = "Connecting...";
-
-  LandmarkDataPacket? latestData;
-  int packetsReceived = 0;
-  String buffer = "";
-
-  @override
-  void initState() {
-    super.initState();
-    _connect();
-  }
-
-  void _connect() async {
-    setState(() => connectionStatus = "Connecting to ${widget.device.name}...");
-
-    try {
-      BluetoothConnection conn = await BluetoothConnection.toAddress(
-        widget.device.address,
-      );
-
-      setState(() {
-        connection = conn;
-        connected = true;
-        connectionStatus = "Connected ✓";
-      });
-
-      // Listen to incoming data stream
-      conn.input!.listen(
-        _onDataReceived,
-        onDone: () {
-          setState(() {
-            connected = false;
-            connectionStatus = "Disconnected";
-          });
-        },
-      );
-    } catch (e) {
-      setState(() {
-        connectionStatus = "Connection failed: $e";
-      });
-    }
-  }
-
-  void _onDataReceived(Uint8List data) {
-    // Convert bytes to string and add to buffer
-    String chunk = utf8.decode(data);
-    buffer += chunk;
-
-    // Process complete JSON messages (delimited by newline)
-    List<String> lines = buffer.split('\n');
-
-    // Keep incomplete line in buffer
-    buffer = lines.removeLast();
-
-    for (String line in lines) {
-      if (line.trim().isEmpty) continue;
-
-      try {
-        Map<String, dynamic> json = jsonDecode(line);
-        LandmarkDataPacket packet = LandmarkDataPacket.fromJson(json);
-
-        setState(() {
-          latestData = packet;
-          packetsReceived++;
-        });
-      } catch (e) {
-        print("Error parsing JSON: $e");
-      }
-    }
-  }
-
-  @override
   void dispose() {
-    connection?.dispose();
-    super.dispose();
+    if (!_ctrl.isClosed) _ctrl.close();
   }
 
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(widget.device.name ?? "Handspeaks"),
-        backgroundColor: connected ? Colors.green : Colors.grey,
-        actions: [
-          Padding(
-            padding: const EdgeInsets.all(16.0),
-            child: Center(
-              child: Text(
-                connectionStatus,
-                style: const TextStyle(fontSize: 12),
-              ),
-            ),
-          ),
-        ],
-      ),
-      body: Column(
-        children: [
-          // Connection status
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.all(12),
-            color: connected ? Colors.green.shade100 : Colors.red.shade100,
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text(
-                  connected ? "🟢 Receiving landmarks..." : "🔴 Not connected",
-                  style: const TextStyle(fontWeight: FontWeight.bold),
-                ),
-                Text(
-                  "Packets: $packetsReceived",
-                  style: const TextStyle(fontSize: 12),
-                ),
-              ],
-            ),
-          ),
-
-          // Data visualization
-          Expanded(
-            child: latestData == null
-                ? const Center(
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        CircularProgressIndicator(),
-                        SizedBox(height: 16),
-                        Text("Waiting for hand landmark data..."),
-                      ],
-                    ),
-                  )
-                : SingleChildScrollView(
-                    padding: const EdgeInsets.all(16),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        // Header info
-                        Card(
-                          child: Padding(
-                            padding: const EdgeInsets.all(16.0),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  "Hands Detected: ${latestData!.handsCount}",
-                                  style: const TextStyle(
-                                    fontSize: 18,
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                                ),
-                                const SizedBox(height: 8),
-                                Text(
-                                  "Timestamp: ${latestData!.timestamp.toStringAsFixed(2)}",
-                                  style: const TextStyle(
-                                    fontSize: 12,
-                                    color: Colors.grey,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                        const SizedBox(height: 16),
-
-                        // Hand data
-                        ...latestData!.hands.map(
-                          (hand) => _buildHandCard(hand),
-                        ),
-
-                        // Visual representation
-                        if (latestData!.hands.isNotEmpty)
-                          Card(
-                            child: Padding(
-                              padding: const EdgeInsets.all(16.0),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  const Text(
-                                    "Hand Visualization",
-                                    style: TextStyle(
-                                      fontSize: 16,
-                                      fontWeight: FontWeight.bold,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 16),
-                                  SizedBox(
-                                    height: 300,
-                                    child: CustomPaint(
-                                      painter: HandLandmarkPainter(
-                                        latestData!.hands[0],
-                                      ),
-                                      size: const Size(double.infinity, 300),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
-                      ],
-                    ),
-                  ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildHandCard(HandData hand) {
-    return Card(
-      margin: const EdgeInsets.only(bottom: 16),
-      child: Padding(
-        padding: const EdgeInsets.all(16.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text(
-                  "${hand.label} Hand",
-                  style: const TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                Chip(
-                  label: Text(
-                    "Confidence: ${(hand.confidence * 100).toStringAsFixed(1)}%",
-                    style: const TextStyle(fontSize: 11),
-                  ),
-                  backgroundColor: Colors.blue.shade100,
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            Text(
-              "Features:",
-              style: TextStyle(
-                fontWeight: FontWeight.bold,
-                color: Colors.grey.shade700,
-              ),
-            ),
-            const SizedBox(height: 8),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceAround,
-              children: [
-                _buildFeatureChip("Thumb", hand.features.thumbDistance),
-                _buildFeatureChip("Index", hand.features.indexDistance),
-                _buildFeatureChip("Size", hand.features.handSize),
-              ],
-            ),
-            const SizedBox(height: 12),
-            Text(
-              "Landmarks: ${hand.landmarks.length} points",
-              style: const TextStyle(fontSize: 12, color: Colors.grey),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildFeatureChip(String label, double value) {
-    return Column(
-      children: [
-        Text(label, style: const TextStyle(fontSize: 11, color: Colors.grey)),
-        const SizedBox(height: 4),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-          decoration: BoxDecoration(
-            color: Colors.green.shade50,
-            borderRadius: BorderRadius.circular(12),
-          ),
-          child: Text(
-            value.toStringAsFixed(3),
-            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-/// Custom painter to visualize hand landmarks
-class HandLandmarkPainter extends CustomPainter {
-  final HandData handData;
-
-  HandLandmarkPainter(this.handData);
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = Colors.blue
-      ..strokeWidth = 2.0
-      ..style = PaintingStyle.fill;
-
-    final linePaint = Paint()
-      ..color = Colors.blue.withOpacity(0.6)
-      ..strokeWidth = 2.0
-      ..style = PaintingStyle.stroke;
-
-    // Draw landmarks
-    for (var landmark in handData.landmarks) {
-      final x = landmark.x * size.width;
-      final y = landmark.y * size.height;
-      canvas.drawCircle(Offset(x, y), 5, paint);
-    }
-
-    // Draw connections (simplified - thumb, index, middle, ring, pinky)
-    final connections = [
-      [0, 1, 2, 3, 4], // Thumb
-      [0, 5, 6, 7, 8], // Index
-      [0, 9, 10, 11, 12], // Middle
-      [0, 13, 14, 15, 16], // Ring
-      [0, 17, 18, 19, 20], // Pinky
-    ];
-
-    for (var connection in connections) {
-      for (int i = 0; i < connection.length - 1; i++) {
-        final start = handData.landmarks[connection[i]];
-        final end = handData.landmarks[connection[i + 1]];
-        canvas.drawLine(
-          Offset(start.x * size.width, start.y * size.height),
-          Offset(end.x * size.width, end.y * size.height),
-          linePaint,
-        );
-      }
+  void clear() {
+    if (!_ctrl.isClosed) {
+      _ctrl.add(LandmarkDataPacket(timestamp: 0.0, handsCount: 0, hands: []));
     }
   }
 
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => true;
+  /// Accepts a payload map (from server) - flexible parsing
+  /// payload should be like: {"timestamp":..., "hands_count":..., "hands":[...] }
+  void processPayload(Map<String, dynamic> payload) {
+    try {
+      final packet = LandmarkDataPacket.fromJson(payload);
+      if (!_ctrl.isClosed) _ctrl.add(packet);
+    } catch (e) {
+      debugPrint('LandmarkReceiver.processPayload error: $e');
+    }
+  }
 }
