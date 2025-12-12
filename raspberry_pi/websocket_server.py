@@ -5,20 +5,60 @@ import time
 import random
 from websockets import serve
 
-# Replace this with your actual MediaPipe retrieval
+import cv2
+import mediapipe as mp
+from picamera2 import Picamera2
+
+# TODO: Replace this with your actual MediaPipe landmark extraction code
+# Example structure for MediaPipe integration:
+#
+# import cv2
+# import mediapipe as mp
+# from picamera2 import Picamera2
+# 
+# mp_hands = mp.solutions.hands
+# hands = mp_hands.Hands(max_num_hands=2, min_detection_confidence=0.5)
+# picam2 = Picamera2()
+# picam2.start()
+
 def get_latest_landmarks():
-    # Return example: a dict with timestamp, hands_count, hands list
-    # Each hand: {'hand_index':0, 'label':'Left', 'confidence':0.98, 'landmarks': [[x,y,z], ...]}
+    """
+    Replace this entire function with your MediaPipe code that:
+    1. Captures frame from camera
+    2. Processes with MediaPipe
+    3. Extracts hand landmarks
+    4. Returns in this exact format
+    """
+    # TEMPORARY: Random data for testing
+    # DELETE THIS and replace with your MediaPipe code
     hands = []
-    # create 1 random hand with 21 landmarks
     landmarks = [[random.random(), random.random(), random.random()] for _ in range(21)]
     hands.append({'hand_index': 0, 'label': 'Left', 'confidence': 0.95, 'landmarks': landmarks})
+    
     payload = {
         'timestamp': time.time(),
         'hands_count': len(hands),
         'hands': hands
     }
     return payload
+    
+    # EXAMPLE of what your MediaPipe code should return:
+    # frame = picam2.capture_array()
+    # results = hands.process(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+    # 
+    # hands_list = []
+    # if results.multi_hand_landmarks:
+    #     for idx, hand_landmarks in enumerate(results.multi_hand_landmarks):
+    #         label = results.multi_handedness[idx].classification[0].label
+    #         confidence = results.multi_handedness[idx].classification[0].score
+    #         landmarks = [{'x': lm.x, 'y': lm.y, 'z': lm.z} for lm in hand_landmarks.landmark]
+    #         hands_list.append({'hand_index': idx, 'label': label, 'confidence': confidence, 'landmarks': landmarks})
+    # 
+    # return {
+    #     'timestamp': time.time(),
+    #     'hands_count': len(hands_list),
+    #     'hands': hands_list
+    # }
 
 connected = set()
 
