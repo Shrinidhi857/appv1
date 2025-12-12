@@ -69,8 +69,9 @@ async def broadcaster():
         await asyncio.sleep(0.05)  # ~20 FPS
 
 async def main():
-    async with serve(handler, "0.0.0.0", 8765):
-        print("WebSocket server listening on ws://0.0.0.0:8765")
+    async with serve(handler, "0.0.0.0", 8000):
+        print("WebSocket server listening on ws://0.0.0.0:8000")
+        print("Flutter should connect to: ws://10.100.169.47:8000")
         await broadcaster()  # runs until cancelled
 
 if __name__ == "__main__":

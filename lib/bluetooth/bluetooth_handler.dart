@@ -16,8 +16,8 @@ class BluetoothPage extends StatefulWidget {
 class _BluetoothPageState extends State<BluetoothPage> {
   // Keep name for compatibility, but replace IP below in device_tab instead if you prefer
   static const String defaultRPI_IP =
-      "192.168.1.100"; // you can change here (or use device_tab)
-  static const int RPI_PORT = 8765;
+      "10.100.169.47"; // you can change here (or use device_tab)
+  static const int RPI_PORT = 8000;
 
   WebSocketChannel? _channel;
   StreamSubscription? _sub;
@@ -220,7 +220,7 @@ class _BluetoothPageState extends State<BluetoothPage> {
                       controller: _ipController,
                       decoration: const InputDecoration(
                         labelText: 'RPi5 IP Address',
-                        hintText: '192.168.1.100',
+                        hintText: '10.100.169.47',
                         border: OutlineInputBorder(),
                       ),
                     ),

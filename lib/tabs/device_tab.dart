@@ -3,7 +3,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:glass/glass.dart';
-import 'package:http/http.dart' as http;
+import 'package:web_socket_channel/web_socket_channel.dart';
 import '../components/frostedglass.dart';
 import '../theme/app_colors.dart';
 import '../landmark_bus.dart';
@@ -17,11 +17,12 @@ class DeviceTab extends StatefulWidget {
 
 class _DeviceTabState extends State<DeviceTab> {
   // <-- Change this to your RPi IP (single place)
-  static const String defaultRPI_IP =
-      "192.168.1.100"; // <-- CHANGE THIS TO YOUR RPI IP
-  static const int API_PORT = 8000; // Your RPi landmark stream API port
+  static const String defaultRPI_IP = "10.100.169.47"; // <-- RPi IP address
+  static const int WS_PORT = 8000; // WebSocket port for landmark stream
 
-  Timer? _pollTimer;
+  WebSocketChannel? _channel;
+  StreamSubscription? _wsSubscription;
+  Timer? _pingTimer;
 
   // UI / status
   bool _isConnected = false; // HTTP polling running flag
@@ -48,94 +49,193 @@ class _DeviceTabState extends State<DeviceTab> {
 
   @override
   void dispose() {
-    _stopPolling();
+    _disconnectWS();
     _ipController.dispose();
     super.dispose();
   }
 
   // -----------------------
-  // Connect / Disconnect (HTTP only)
+  // Connect / Disconnect (WebSocket)
   // -----------------------
   void _connect() {
-    _startPolling();
+    _connectWS();
   }
 
   void _disconnect() {
-    _stopPolling();
+    _disconnectWS();
   }
 
   // -----------------------
-  // HTTP Polling implementation (RPi API on port 5555)
+  // WebSocket implementation (RPi landmark stream on port 8000)
   // -----------------------
-  void _startPolling({Duration interval = const Duration(milliseconds: 250)}) {
+  void _connectWS() {
     final ip = _ipController.text.trim();
+    final uri = Uri.parse("ws://$ip:$WS_PORT");
+
     setState(() {
-      _connectionStatus = "Starting HTTP polling to $ip:$API_PORT";
-      _isConnected = true;
+      _connectionStatus = "Connecting to WebSocket ws://$ip:$WS_PORT...";
     });
 
-    _pollTimer = Timer.periodic(interval, (_) async {
-      try {
-        final url = Uri.parse('http://$ip:$API_PORT/landmarks');
-        final resp = await http.get(url).timeout(const Duration(seconds: 2));
-        if (resp.statusCode == 200) {
-          final Map<String, dynamic> payload = json.decode(resp.body);
-          // Publish landmarks to shared bus for 3D visualization
-          landmarkBus.processPayload(payload);
+    try {
+      _channel = WebSocketChannel.connect(uri);
+      _wsSubscription = _channel!.stream.listen(
+        _onWSMessage,
+        onError: _onWSError,
+        onDone: _onWSDone,
+        cancelOnError: false,
+      );
+
+      setState(() {
+        _isConnected = true;
+        _connectionStatus = "✓ Connected via WebSocket to $ip:$WS_PORT";
+        _connectedName = "RPi5 @ $ip";
+      });
+
+      _startPing();
+    } catch (e) {
+      setState(() {
+        _isConnected = false;
+        _connectionStatus = "WebSocket connection failed: $e";
+      });
+      _closeChannel();
+    }
+  }
+
+  void _disconnectWS() {
+    _stopPing();
+    try {
+      _wsSubscription?.cancel();
+    } catch (_) {}
+    _closeChannel();
+    setState(() {
+      _isConnected = false;
+      _connectionStatus = "Disconnected";
+      _isReceiving = false;
+    });
+  }
+
+  void _closeChannel() {
+    try {
+      _channel?.sink.close();
+    } catch (_) {}
+    _channel = null;
+  }
+
+  void _onWSMessage(dynamic message) {
+    try {
+      if (message == null) return;
+      final String text = message.toString();
+      debugPrint(
+        "WebSocket received: ${text.substring(0, text.length > 100 ? 100 : text.length)}...",
+      );
+
+      final Map<String, dynamic> data = json.decode(text);
+
+      // Check if it's a wrapped message with type/payload structure
+      if (data.containsKey('type')) {
+        final String? type = data['type']?.toString();
+        final payload = data['payload'];
+
+        switch (type) {
+          case 'WELCOME':
+            setState(
+              () => _connectionStatus =
+                  payload?['message']?.toString() ?? _connectionStatus,
+            );
+            break;
+          case 'LANDMARKS':
+            if (payload is Map<String, dynamic>) {
+              landmarkBus.processPayload(Map<String, dynamic>.from(payload));
+              setState(() => _isReceiving = true);
+            }
+            break;
+          case 'PONG':
+            // Heartbeat response
+            break;
+          default:
+            setState(() => _receivedMessages.add(text));
+        }
+      } else {
+        // Direct landmark data format
+        if (data.containsKey('hands') || data.containsKey('timestamp')) {
+          landmarkBus.processPayload(data);
           setState(() {
             _isReceiving = true;
             _connectionStatus = "✓ Receiving landmarks from RPi";
           });
-        } else {
-          debugPrint("HTTP status: ${resp.statusCode}");
         }
-      } catch (e) {
-        debugPrint("Polling error: $e");
-        setState(() {
-          _connectionStatus = "Retrying connection...";
-        });
+      }
+    } catch (e) {
+      debugPrint("WebSocket parse error: $e");
+    }
+  }
+
+  void _onWSError(Object e) {
+    debugPrint("WebSocket Error: $e");
+    _stopPing();
+    _closeChannel();
+    setState(() {
+      _isConnected = false;
+      _connectionStatus = "WebSocket error: $e";
+      _isReceiving = false;
+    });
+  }
+
+  void _onWSDone() {
+    debugPrint("WebSocket connection closed");
+    _stopPing();
+    _closeChannel();
+    setState(() {
+      _isConnected = false;
+      _connectionStatus = "WebSocket connection closed";
+      _isReceiving = false;
+    });
+  }
+
+  void _startPing({Duration interval = const Duration(seconds: 10)}) {
+    _stopPing();
+    _pingTimer = Timer.periodic(interval, (_) {
+      if (_channel != null && _isConnected) {
+        try {
+          _channel!.sink.add(
+            json.encode({
+              "type": "PING",
+              "payload": DateTime.now().toIso8601String(),
+            }),
+          );
+        } catch (e) {
+          debugPrint("Ping error: $e");
+        }
       }
     });
   }
 
-  void _stopPolling() {
-    _pollTimer?.cancel();
-    _pollTimer = null;
-    setState(() {
-      _isConnected = false;
-      _isReceiving = false;
-      _connectionStatus = "HTTP polling stopped";
-    });
+  void _stopPing() {
+    _pingTimer?.cancel();
+    _pingTimer = null;
   }
 
   // -----------------------
-  // Send command to RPi via HTTP POST
+  // Send command to RPi via WebSocket
   // -----------------------
   void _sendCommand(String command) {
-    final ip = _ipController.text.trim();
-    final url = Uri.parse('http://$ip:$API_PORT/command');
-    http
-        .post(
-          url,
-          body: json.encode({'command': command}),
-          headers: {'Content-Type': 'application/json'},
-        )
-        .then((resp) {
-          if (resp.statusCode == 200) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text("✓ Command sent to RPi")),
-            );
-          } else {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text("Command error: ${resp.statusCode}")),
-            );
-          }
-        })
-        .catchError((e) {
-          ScaffoldMessenger.of(
-            context,
-          ).showSnackBar(SnackBar(content: Text("Command send failed: $e")));
-        });
+    if (_channel == null || !_isConnected) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Not connected to WebSocket")),
+      );
+      return;
+    }
+
+    try {
+      _channel!.sink.add(json.encode({'type': 'COMMAND', 'payload': command}));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text("✓ Command sent: $command")));
+    } catch (e) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text("Command send failed: $e")));
+    }
   }
 
   // -----------------------
