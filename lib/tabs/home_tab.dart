@@ -1,3 +1,4 @@
+// File: home_tab.dart
 import 'dart:async';
 import 'dart:math';
 import 'dart:ui';
@@ -6,6 +7,7 @@ import 'package:google_fonts/google_fonts.dart';
 import '../components/frostedglass.dart';
 import '../theme/app_colors.dart';
 import '../pages/Abled_to_Sign/SpeechToTextPage.dart';
+import 'device_tab.dart';
 
 class HomeTab extends StatefulWidget {
   const HomeTab({super.key});
@@ -327,7 +329,7 @@ class _HomeTabState extends State<HomeTab> {
                 ),
 
                 const SizedBox(height: 20),
-                
+
                 // ---- Speech to Text Button ----
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 20),
@@ -415,6 +417,24 @@ class _HomeTabState extends State<HomeTab> {
                 ),
 
                 const SizedBox(height: 20),
+
+                // NEW: Quick button to open Device (Wi-Fi) controls
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 20),
+                  child: ElevatedButton.icon(
+                    icon: const Icon(Icons.wifi),
+                    label: const Text('Open Connection Controls'),
+                    onPressed: () {
+                      Navigator.push(context, MaterialPageRoute(builder: (_) => const DeviceTab()));
+                    },
+                    style: ElevatedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                      backgroundColor: Colors.blueGrey,
+                    ),
+                  ),
+                ),
+
+                const SizedBox(height: 20),
               ],
             ),
           ),
@@ -423,7 +443,3 @@ class _HomeTabState extends State<HomeTab> {
     );
   }
 }
-
-// Note: You need to add this import at the top of the file:
-// import 'dart:ui';
-// import '../pages/Abled_to_Sign/SpeechToTextPage.dart';

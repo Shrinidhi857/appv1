@@ -1,8 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:glass/glass.dart';
 
-import '../theme/app_colors.dart';
-
 class FrostedCard extends StatelessWidget {
   final Widget child;
   final EdgeInsetsGeometry padding;
@@ -28,9 +26,7 @@ class FrostedCard extends StatelessWidget {
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
       padding: padding,
-      child: Container(
-        child: child,
-      )
+      child: Container(child: child),
     ).asGlass(
       enabled: true,
       frosted: true,

@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:glass/glass.dart';
 import 'dart:async';
 import '../theme/app_colors.dart';
 import 'Selection_page.dart';
@@ -11,7 +10,8 @@ class SplashPage extends StatefulWidget {
   State<SplashPage> createState() => _SplashPageState();
 }
 
-class _SplashPageState extends State<SplashPage> with SingleTickerProviderStateMixin {
+class _SplashPageState extends State<SplashPage>
+    with SingleTickerProviderStateMixin {
   late AnimationController _animationController;
   late Animation<double> _fadeAnimation;
   late Animation<double> _scaleAnimation;
@@ -27,17 +27,11 @@ class _SplashPageState extends State<SplashPage> with SingleTickerProviderStateM
     );
 
     _fadeAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
-      CurvedAnimation(
-        parent: _animationController,
-        curve: Curves.easeInOut,
-      ),
+      CurvedAnimation(parent: _animationController, curve: Curves.easeInOut),
     );
 
     _scaleAnimation = Tween<double>(begin: 0.8, end: 1.0).animate(
-      CurvedAnimation(
-        parent: _animationController,
-        curve: Curves.easeOutBack,
-      ),
+      CurvedAnimation(parent: _animationController, curve: Curves.easeOutBack),
     );
 
     _animationController.forward();
@@ -47,7 +41,7 @@ class _SplashPageState extends State<SplashPage> with SingleTickerProviderStateM
       if (mounted) {
         // Navigate to your next page
         Navigator.pushReplacement(
-         context,
+          context,
           MaterialPageRoute(builder: (context) => SelectionPage()),
         );
         print("Navigate to next page");
@@ -77,10 +71,7 @@ class _SplashPageState extends State<SplashPage> with SingleTickerProviderStateM
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
                 gradient: RadialGradient(
-                  colors: [
-                    Colors.purple.withOpacity(0.2),
-                    Colors.transparent,
-                  ],
+                  colors: [Colors.purple.withOpacity(0.2), Colors.transparent],
                 ),
               ),
             ),
@@ -94,10 +85,7 @@ class _SplashPageState extends State<SplashPage> with SingleTickerProviderStateM
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
                 gradient: RadialGradient(
-                  colors: [
-                    Colors.blue.withOpacity(0.2),
-                    Colors.transparent,
-                  ],
+                  colors: [Colors.blue.withOpacity(0.2), Colors.transparent],
                 ),
               ),
             ),
@@ -162,17 +150,20 @@ class _SplashPageState extends State<SplashPage> with SingleTickerProviderStateM
                               ),
                             ],
                           ),
-                          SizedBox(height: 20,),
-                          Text("Connecting Hands, Connecting Bharat",style: TextStyle(
-                            fontFamily: "Urbanist",
-                            fontWeight: FontWeight.w700,
-                            fontSize: 20,
-                            color: AppColors.textSecondary,
-                          ),)
+                          SizedBox(height: 20),
+                          Text(
+                            "Connecting Hands, Connecting Bharat",
+                            style: TextStyle(
+                              fontFamily: "Urbanist",
+                              fontWeight: FontWeight.w700,
+                              fontSize: 20,
+                              color: AppColors.textSecondary,
+                            ),
+                          ),
                         ],
                       ),
                     ),
-                  )
+                  ),
                 ),
               ),
             ),

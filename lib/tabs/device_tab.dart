@@ -1,11 +1,15 @@
+// lib/device_tab.dart
+import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:glass/glass.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:flutter_bluetooth_serial/flutter_bluetooth_serial.dart';
+import 'package:web_socket_channel/web_socket_channel.dart';
+import 'package:http/http.dart' as http;
 import '../components/frostedglass.dart';
 import '../theme/app_colors.dart';
+import '../landmark_bus.dart';
 
 class DeviceTab extends StatefulWidget {
   const DeviceTab({super.key});
@@ -15,230 +19,359 @@ class DeviceTab extends StatefulWidget {
 }
 
 class _DeviceTabState extends State<DeviceTab> {
-  // Bluetooth instances
-  final FlutterBluetoothSerial _bluetooth = FlutterBluetoothSerial.instance;
-  BluetoothConnection? _connection;
-  List<BluetoothDevice> _devices = [];
-  BluetoothDevice? _connectedDevice;
+  // <-- Change this to your RPi IP (single place)
+  static const String defaultRPI_IP = "192.168.1.100"; // <-- CHANGE THIS
+  static const int WS_PORT = 8765;
+  static const int HTTP_PORT = 5000; // change if your API uses different port
 
-  // Connection states
-  bool _isConnected = false;
-  bool _isSearching = false;
-  bool _autoConnecting = false;
+  WebSocketChannel? _channel;
+  StreamSubscription? _sub;
+  Timer? _pingTimer;
+  Timer? _pollTimer;
+
+  // Mode toggle: true = WebSocket (recommended), false = HTTP polling
+  bool _useWebSocket = true;
+
+  // UI / status
+  bool _isConnected =
+      false; // For WS mode: WS conn; For HTTP mode: polling running flag
+  bool _isReceiving = false;
   String _connectionStatus = "Not connected";
+  String _connectedName = "RPi5";
 
-  // Device controls
+  // Device controls (kept same)
   bool _cameraEnabled = true;
   bool _speakerEnabled = true;
   bool _tofSensorEnabled = false;
   bool _microphoneEnabled = true;
   bool _ledEnabled = false;
 
-  // Data from device
+  // Data from device (telemetry)
   String _batteryLevel = "87%";
   String _latency = "42 ms";
   final List<String> _receivedMessages = [];
 
+  final TextEditingController _ipController = TextEditingController(
+    text: defaultRPI_IP,
+  );
+
   @override
   void initState() {
     super.initState();
-    _initializeBluetooth();
   }
 
   @override
   void dispose() {
-    _connection?.dispose();
+    _stopPing();
+    _stopPolling();
+    _sub?.cancel();
+    _closeChannel();
+    _ipController.dispose();
     super.dispose();
   }
 
-  // -----------------------------------------------------------
-  // BLUETOOTH INITIALIZATION & CONNECTION
-  // -----------------------------------------------------------
-
-  void _initializeBluetooth() async {
-    bool? isEnabled = await _bluetooth.isEnabled;
-    if (isEnabled == null || !isEnabled) {
-      setState(() => _connectionStatus = "Bluetooth is OFF");
-      await _bluetooth.requestEnable();
+  // -----------------------
+  // Mode control
+  // -----------------------
+  void _setMode(bool useWs) {
+    if (_useWebSocket == useWs) return;
+    // stop running mode
+    if (_isConnected) {
+      if (_useWebSocket)
+        _disconnectWS();
+      else
+        _stopPolling();
     }
-  }
-
-  void _startSearching() async {
     setState(() {
-      _isSearching = true;
-      _connectionStatus = "Scanning for Handspeaks...";
-      _devices.clear();
-    });
-
-    try {
-      await _bluetooth.cancelDiscovery();
-    } catch (e) {
-      print("Cancel discovery error: $e");
-    }
-
-    var subscription = _bluetooth.startDiscovery();
-    subscription.listen((result) {
-      final device = result.device;
-
-      // Add to list if not already present
-      if (!_devices.any((d) => d.address == device.address)) {
-        setState(() => _devices.add(device));
-      }
-
-      // Auto-connect to "Handspeaks" when found
-      if (!_autoConnecting &&
-          device.name != null &&
-          device.name!.toLowerCase().contains('handspeaks')) {
-        setState(() => _autoConnecting = true);
-        _autoConnectToDevice(device);
-      }
-    }).onDone(() {
-      setState(() {
-        _isSearching = false;
-        if (!_autoConnecting) {
-          _connectionStatus = _devices.isEmpty
-              ? "No devices found"
-              : "Scan complete";
-        }
-      });
+      _useWebSocket = useWs;
+      _connectionStatus =
+          "Switched to ${_useWebSocket ? 'WebSocket' : 'HTTP polling'}";
     });
   }
 
-  void _autoConnectToDevice(BluetoothDevice device) async {
-    try {
-      await _bluetooth.cancelDiscovery();
-      setState(() {
-        _isSearching = false;
-        _connectionStatus = "Connecting to ${device.name}...";
-      });
-    } catch (e) {
-      print("Cancel discovery error: $e");
+  // -----------------------
+  // Connect / Disconnect
+  // -----------------------
+  void _connect() {
+    if (_useWebSocket) {
+      _connectWS();
+    } else {
+      _startPolling();
     }
-
-    await _connectToDevice(device);
   }
 
-  void _manualConnectToDevice(BluetoothDevice device) async {
-    try {
-      await _bluetooth.cancelDiscovery();
-      setState(() => _isSearching = false);
-    } catch (e) {
-      print("Cancel discovery error: $e");
+  void _disconnect() {
+    if (_useWebSocket) {
+      _disconnectWS();
+    } else {
+      _stopPolling();
     }
-
-    await _connectToDevice(device);
   }
 
-  Future<void> _connectToDevice(BluetoothDevice device) async {
-    setState(() => _connectionStatus = "Connecting...");
+  // -----------------------
+  // WebSocket implementation
+  // -----------------------
+  void _connectWS() {
+    final ip = _ipController.text.trim();
+    final uri = Uri.parse("ws://$ip:$WS_PORT");
+
+    setState(() {
+      _connectionStatus = "Connecting (WS) to $ip:$WS_PORT ...";
+    });
 
     try {
-      // Bond device if not already bonded
-      if (!device.isBonded) {
-        await FlutterBluetoothSerial.instance.bondDeviceAtAddress(device.address);
-      }
-
-      // Establish connection
-      BluetoothConnection conn = await BluetoothConnection.toAddress(device.address);
-
-      setState(() {
-        _connection = conn;
-        _connectedDevice = device;
-        _isConnected = true;
-        _connectionStatus = "Connected";
-        _autoConnecting = false;
-      });
-
-      // Listen for incoming data
-      _connection!.input!.listen((Uint8List data) {
-        String received = utf8.decode(data).trim();
-        setState(() {
-          _receivedMessages.add(received);
-          // Parse data if it's JSON or specific format
-          _parseReceivedData(received);
-        });
-      }).onDone(() {
-        _disconnectDevice();
-      });
-
-    } catch (e) {
-      setState(() {
-        _connectionStatus = "Connection failed: $e";
-        _isConnected = false;
-        _autoConnecting = false;
-      });
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text("Failed to connect: $e"),
-          backgroundColor: Colors.red,
-        ),
+      _channel = WebSocketChannel.connect(uri);
+      _sub = _channel!.stream.listen(
+        _onWSMessage,
+        onError: _onWSError,
+        onDone: _onWSDone,
+        cancelOnError: true,
       );
+
+      setState(() {
+        _isConnected = true;
+        _connectionStatus = "Connected via WS to $ip";
+        _connectedName = "RPi5 @ $ip";
+      });
+
+      _startPing();
+    } catch (e) {
+      setState(() {
+        _isConnected = false;
+        _connectionStatus = "WS connect failed: $e";
+      });
+      _closeChannel();
     }
   }
 
-  void _disconnectDevice() {
-    _connection?.dispose();
+  void _disconnectWS() {
+    _stopPing();
+    try {
+      _sub?.cancel();
+    } catch (_) {}
+    _closeChannel();
     setState(() {
       _isConnected = false;
-      _isSearching = false;
-      _autoConnecting = false;
-      _connection = null;
-      _connectedDevice = null;
-      _connectionStatus = "Disconnected";
+      _connectionStatus = "Disconnected (WS)";
+      _isReceiving = false;
     });
   }
 
-  void _parseReceivedData(String data) {
-    // Example: Parse JSON data from device
-    // {"battery": "85%", "latency": "38ms"}
+  void _closeChannel() {
     try {
-      final Map<String, dynamic> json = jsonDecode(data);
-      setState(() {
-        if (json.containsKey('battery')) _batteryLevel = json['battery'];
-        if (json.containsKey('latency')) _latency = json['latency'];
-      });
+      _channel?.sink.close();
+    } catch (_) {}
+    _channel = null;
+  }
+
+  void _onWSMessage(dynamic raw) {
+    try {
+      if (raw == null) return;
+      final String text = raw is String ? raw : utf8.decode(raw as Uint8List);
+      debugPrint("WS In: $text");
+      final Map<String, dynamic> data = json.decode(text);
+      final String? type = data['type']?.toString();
+      final payload = data['payload'];
+
+      if (type == null) return;
+
+      switch (type) {
+        case 'WELCOME':
+          setState(
+            () => _connectionStatus =
+                payload?['message']?.toString() ?? _connectionStatus,
+          );
+          break;
+        case 'STATUS':
+          setState(() {
+            _isReceiving = payload is Map && payload['streaming'] == true;
+            _connectionStatus =
+                payload?['message']?.toString() ?? _connectionStatus;
+          });
+          break;
+        case 'LANDMARKS':
+          if (payload is Map<String, dynamic>) {
+            // publish into shared bus
+            landmarkBus.processPayload(Map<String, dynamic>.from(payload));
+            setState(() => _isReceiving = true);
+          }
+          break;
+        case 'TELEMETRY':
+          if (payload is Map) {
+            if (payload.containsKey('battery'))
+              _batteryLevel = payload['battery'].toString();
+            if (payload.containsKey('latency'))
+              _latency = payload['latency'].toString();
+            setState(() {});
+          }
+          break;
+        case 'PONG':
+          // ignore
+          break;
+        default:
+          setState(() => _receivedMessages.add(text));
+      }
     } catch (e) {
-      // If not JSON, just store as message
-      print("Received non-JSON data: $data");
+      debugPrint("WS parse error: $e");
     }
   }
 
+  void _onWSError(Object e) {
+    debugPrint("WS Error: $e");
+    _stopPing();
+    _closeChannel();
+    setState(() {
+      _isConnected = false;
+      _connectionStatus = "WS error";
+      _isReceiving = false;
+    });
+  }
+
+  void _onWSDone() {
+    debugPrint("WS Done");
+    _stopPing();
+    _closeChannel();
+    setState(() {
+      _isConnected = false;
+      _connectionStatus = "WS connection closed";
+      _isReceiving = false;
+    });
+  }
+
+  void _startPing({Duration interval = const Duration(seconds: 10)}) {
+    _stopPing();
+    _pingTimer = Timer.periodic(interval, (_) {
+      if (_channel != null) {
+        try {
+          _channel!.sink.add(
+            json.encode({
+              "type": "PING",
+              "payload": DateTime.now().toIso8601String(),
+            }),
+          );
+        } catch (e) {
+          debugPrint("Ping error: $e");
+        }
+      }
+    });
+  }
+
+  void _stopPing() {
+    _pingTimer?.cancel();
+    _pingTimer = null;
+  }
+
+  // -----------------------
+  // HTTP Polling implementation (fallback)
+  // -----------------------
+  void _startPolling({Duration interval = const Duration(milliseconds: 250)}) {
+    final ip = _ipController.text.trim();
+    setState(() {
+      _connectionStatus = "Starting HTTP polling to $ip:$HTTP_PORT";
+      _isConnected = true;
+    });
+
+    _pollTimer = Timer.periodic(interval, (_) async {
+      try {
+        final url = Uri.parse(
+          'http://$ip:$HTTP_PORT/landmarks',
+        ); // expected endpoint
+        final resp = await http.get(url).timeout(const Duration(seconds: 2));
+        if (resp.statusCode == 200) {
+          final Map<String, dynamic> payload = json.decode(resp.body);
+          // publish to bus:
+          landmarkBus.processPayload(payload);
+          setState(() {
+            _isReceiving = true;
+            _connectionStatus =
+                "Polling: last ${DateTime.now().toIso8601String()}";
+          });
+        } else {
+          debugPrint("Polling HTTP status: ${resp.statusCode}");
+        }
+      } catch (e) {
+        debugPrint("Polling error: $e");
+        // don't set disconnected - we want polling to keep retrying
+        setState(() {
+          _connectionStatus = "Polling error: $e";
+        });
+      }
+    });
+  }
+
+  void _stopPolling() {
+    _pollTimer?.cancel();
+    _pollTimer = null;
+    setState(() {
+      _isConnected = false;
+      _isReceiving = false;
+      _connectionStatus = "HTTP polling stopped";
+    });
+  }
+
+  // -----------------------
+  // Send command (works in both modes)
+  // -----------------------
   void _sendCommand(String command) {
-    if (_connection == null || !_isConnected) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Device not connected!")),
-      );
-      return;
-    }
-
-    try {
-      _connection!.output.add(Uint8List.fromList(utf8.encode("$command\n")));
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Send error: $e")),
-      );
+    if (_useWebSocket) {
+      if (_channel == null) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text("WS not connected")));
+        return;
+      }
+      try {
+        _channel!.sink.add(
+          json.encode({'type': 'COMMAND', 'payload': command}),
+        );
+      } catch (e) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text("Send error: $e")));
+      }
+    } else {
+      // HTTP-mode: send command to REST endpoint
+      final ip = _ipController.text.trim();
+      final url = Uri.parse('http://$ip:$HTTP_PORT/command');
+      http
+          .post(
+            url,
+            body: json.encode({'command': command}),
+            headers: {'Content-Type': 'application/json'},
+          )
+          .then((resp) {
+            if (resp.statusCode == 200) {
+              ScaffoldMessenger.of(
+                context,
+              ).showSnackBar(const SnackBar(content: Text("Command sent")));
+            } else {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(content: Text("Command error: ${resp.statusCode}")),
+              );
+            }
+          })
+          .catchError((e) {
+            ScaffoldMessenger.of(
+              context,
+            ).showSnackBar(SnackBar(content: Text("Command send failed: $e")));
+          });
     }
   }
 
-  // -----------------------------------------------------------
-  // UI BUILD
-  // -----------------------------------------------------------
-
+  // -----------------------
+  // UI
+  // -----------------------
   @override
   Widget build(BuildContext context) {
     return Stack(
       children: [
         Positioned.fill(
           child: _isConnected ? _buildConnectedView() : _buildConnectionView(),
-        )
+        ),
       ],
     );
   }
 
-  // -----------------------------------------------------------
-  // Connection View (When Not Connected)
-  // -----------------------------------------------------------
   Widget _buildConnectionView() {
     return Center(
       child: SingleChildScrollView(
@@ -246,7 +379,7 @@ class _DeviceTabState extends State<DeviceTab> {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            // Device Icon
+            // Icon
             Container(
               width: 120,
               height: 120,
@@ -261,11 +394,7 @@ class _DeviceTabState extends State<DeviceTab> {
                   end: Alignment.bottomRight,
                 ),
               ),
-              child: Icon(
-                Icons.bluetooth,
-                size: 60,
-                color: AppColors.textPrimary,
-              ),
+              child: Icon(Icons.wifi, size: 60, color: AppColors.textPrimary),
             ).asGlass(
               enabled: true,
               tintColor: Colors.transparent,
@@ -275,66 +404,101 @@ class _DeviceTabState extends State<DeviceTab> {
               blurY: 500,
             ),
 
-            const SizedBox(height: 32),
+            const SizedBox(height: 24),
 
-            // Connection Card
             FrostedCard(
               child: Column(
                 children: [
                   Text(
-                    _isSearching ? 'Searching for Handspeaks...' : 'Connect Your Device',
+                    'Connect Your Device (Wi-Fi)',
                     style: TextStyle(
                       fontFamily: "Urbanist",
                       fontWeight: FontWeight.w700,
-                      fontSize: 24,
+                      fontSize: 22,
                       color: AppColors.textPrimary,
                     ),
-                    textAlign: TextAlign.center,
                   ),
-
-                  const SizedBox(height: 12),
-
+                  const SizedBox(height: 8),
                   Text(
                     _connectionStatus,
-                    style: TextStyle(
-                      fontFamily: "Urbanist",
-                      fontWeight: FontWeight.w500,
-                      fontSize: 14,
-                      color: AppColors.textSecondary,
-                    ),
-                    textAlign: TextAlign.center,
+                    style: TextStyle(color: AppColors.textSecondary),
                   ),
-
-                  const SizedBox(height: 32),
-
-                  // Searching Animation or Search Button
-                  if (_isSearching)
-                    Column(
+                  const SizedBox(height: 12),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16.0),
+                    child: TextField(
+                      controller: _ipController,
+                      decoration: const InputDecoration(
+                        border: OutlineInputBorder(),
+                        labelText: 'RPi5 IP Address',
+                        hintText: '192.168.1.100',
+                        prefixIcon: Icon(Icons.router),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16.0),
+                    child: Row(
                       children: [
-                        SizedBox(
-                          width: 40,
-                          height: 40,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 3,
-                            valueColor: AlwaysStoppedAnimation<Color>(
-                              const Color(0xFF6BAB90),
+                        Expanded(
+                          child: ElevatedButton.icon(
+                            onPressed: () => _setMode(true),
+                            icon: const Icon(Icons.wifi),
+                            label: const Text('Use WebSocket'),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: _useWebSocket
+                                  ? Colors.blueAccent
+                                  : Colors.grey,
                             ),
                           ),
                         ),
-                        const SizedBox(height: 24),
-                        // Available Devices Found
-                        ..._devices.map((device) => _buildAvailableDevice(device)).toList(),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: ElevatedButton.icon(
+                            onPressed: () => _setMode(false),
+                            icon: const Icon(Icons.http),
+                            label: const Text('Use HTTP Polling'),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: !_useWebSocket
+                                  ? Colors.blueAccent
+                                  : Colors.grey,
+                            ),
+                          ),
+                        ),
                       ],
-                    )
-                  else
-                    _buildSearchButton(),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: ElevatedButton.icon(
+                          onPressed: _isConnected ? null : _connect,
+                          icon: const Icon(Icons.link),
+                          label: const Text('Connect'),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.green,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: ElevatedButton.icon(
+                          onPressed: _isConnected ? _disconnect : null,
+                          icon: const Icon(Icons.link_off),
+                          label: const Text('Disconnect'),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.red,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
                 ],
               ),
             ),
-
-            const SizedBox(height: 24),
-
-            // Instructions
+            const SizedBox(height: 16),
             Container(
               padding: const EdgeInsets.all(20),
               child: Column(
@@ -342,17 +506,17 @@ class _DeviceTabState extends State<DeviceTab> {
                 children: [
                   _buildInstructionItem(
                     icon: Icons.power_settings_new,
-                    text: "Turn on your Handspeaks device",
+                    text: "Power on your Handspeaks device (RPi5)",
                   ),
                   const SizedBox(height: 12),
                   _buildInstructionItem(
-                    icon: Icons.bluetooth,
-                    text: "Enable Bluetooth on your phone",
+                    icon: Icons.wifi,
+                    text: "Ensure both phone and RPi are on same Wi-Fi network",
                   ),
                   const SizedBox(height: 12),
                   _buildInstructionItem(
-                    icon: Icons.search,
-                    text: "Tap search to find device",
+                    icon: Icons.settings,
+                    text: "Enter RPi IP & tap Connect",
                   ),
                 ],
               ),
@@ -370,125 +534,203 @@ class _DeviceTabState extends State<DeviceTab> {
     );
   }
 
-  Widget _buildSearchButton() {
-    return GestureDetector(
-      onTap: _startSearching,
-      child: Container(
-        width: double.infinity,
-        padding: const EdgeInsets.symmetric(vertical: 16),
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(16),
-          gradient: LinearGradient(
-            colors: [
-              const Color(0xFF6BAB90),
-              const Color(0xFF7BA3BC),
-            ],
+  Widget _buildConnectedView() {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.only(bottom: 180),
+      child: Column(
+        children: [
+          const SizedBox(height: 20),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20),
+            child:
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  child: Row(
+                    children: [
+                      Container(
+                        width: 8,
+                        height: 8,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: const Color(0xFF34C759),
+                          boxShadow: [
+                            BoxShadow(
+                              color: const Color(0xFF34C759).withOpacity(0.5),
+                              blurRadius: 8,
+                              spreadRadius: 2,
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Text(
+                          _connectedName,
+                          style: TextStyle(
+                            fontFamily: "Urbanist",
+                            fontWeight: FontWeight.w600,
+                            fontSize: 14,
+                            color: AppColors.textPrimary,
+                          ),
+                        ),
+                      ),
+                      ElevatedButton(
+                        onPressed: () => _sendCommand('start'),
+                        child: const Text('Start'),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.green,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      ElevatedButton(
+                        onPressed: () => _sendCommand('stop'),
+                        child: const Text('Stop'),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.red,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      ElevatedButton(
+                        onPressed: _disconnect,
+                        child: const Text('Disconnect'),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.grey,
+                        ),
+                      ),
+                    ],
+                  ),
+                ).asGlass(
+                  enabled: true,
+                  tintColor: Colors.transparent,
+                  clipBorderRadius: BorderRadius.circular(16),
+                  frosted: true,
+                  blurX: 500,
+                  blurY: 500,
+                ),
           ),
-        ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(Icons.search, color: Colors.white, size: 24),
-            const SizedBox(width: 12),
-            Text(
-              'Search for Device',
-              style: TextStyle(
-                fontFamily: "Urbanist",
-                fontWeight: FontWeight.w700,
-                fontSize: 16,
-                color: Colors.white,
+          const SizedBox(height: 16),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20),
+            child: FrostedCard(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Device Controls',
+                    style: TextStyle(
+                      fontFamily: "Urbanist",
+                      fontWeight: FontWeight.w700,
+                      fontSize: 20,
+                      color: AppColors.pureBlack,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  _buildControlItem(
+                    icon: Icons.camera_alt,
+                    label: "Camera",
+                    value: _cameraEnabled,
+                    onChanged: (val) {
+                      setState(() => _cameraEnabled = val);
+                      _sendCommand("CAMERA:${val ? 'ON' : 'OFF'}");
+                    },
+                  ),
+                  _buildControlItem(
+                    icon: Icons.volume_up,
+                    label: "Speaker",
+                    value: _speakerEnabled,
+                    onChanged: (val) {
+                      setState(() => _speakerEnabled = val);
+                      _sendCommand("SPEAKER:${val ? 'ON' : 'OFF'}");
+                    },
+                  ),
+                  _buildControlItem(
+                    icon: Icons.sensors,
+                    label: "ToF Sensor",
+                    value: _tofSensorEnabled,
+                    onChanged: (val) {
+                      setState(() => _tofSensorEnabled = val);
+                      _sendCommand("TOF:${val ? 'ON' : 'OFF'}");
+                    },
+                  ),
+                  _buildControlItem(
+                    icon: Icons.mic,
+                    label: "Microphone",
+                    value: _microphoneEnabled,
+                    onChanged: (val) {
+                      setState(() => _microphoneEnabled = val);
+                      _sendCommand("MIC:${val ? 'ON' : 'OFF'}");
+                    },
+                  ),
+                  _buildControlItem(
+                    icon: Icons.lightbulb_outline,
+                    label: "LED Indicator",
+                    value: _ledEnabled,
+                    onChanged: (val) {
+                      setState(() => _ledEnabled = val);
+                      _sendCommand("LED:${val ? 'ON' : 'OFF'}");
+                    },
+                    isLast: true,
+                  ),
+                ],
               ),
             ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildAvailableDevice(BluetoothDevice device) {
-    final isHandspeaks = device.name != null &&
-        device.name!.toLowerCase().contains('handspeaks');
-
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
-      child: GestureDetector(
-        onTap: () => _manualConnectToDevice(device),
-        child: Container(
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(
-              color: isHandspeaks
-                  ? const Color(0xFF6BAB90)
-                  : const Color(0xFF6BAB90).withOpacity(0.3),
-              width: isHandspeaks ? 2 : 1,
-            ),
           ),
-          child: Row(
-            children: [
-              Container(
-                width: 48,
-                height: 48,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: const Color(0xFF6BAB90).withOpacity(0.2),
-                ),
-                child: Icon(
-                  Icons.bluetooth,
-                  color: const Color(0xFF6BAB90),
-                  size: 24,
-                ),
-              ),
-              const SizedBox(width: 16),
-              Expanded(
+          const SizedBox(height: 16),
+          if (_receivedMessages.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 20),
+              child: FrostedCard(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      device.name ?? 'Unknown Device',
+                      'Recent Messages',
                       style: TextStyle(
                         fontFamily: "Urbanist",
-                        fontWeight: isHandspeaks ? FontWeight.w700 : FontWeight.w600,
-                        fontSize: 16,
-                        color: AppColors.textPrimary,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 20,
+                        color: AppColors.pureBlack,
                       ),
                     ),
-                    const SizedBox(height: 4),
-                    Text(
-                      device.isBonded ? 'Paired • ${device.address}' : 'Ready to pair',
-                      style: TextStyle(
-                        fontFamily: "Urbanist",
-                        fontWeight: FontWeight.w500,
-                        fontSize: 14,
-                        color: AppColors.textSecondary,
+                    const SizedBox(height: 12),
+                    Container(
+                      constraints: const BoxConstraints(maxHeight: 200),
+                      child: ListView.builder(
+                        shrinkWrap: true,
+                        itemCount: (_receivedMessages.length > 5
+                            ? 5
+                            : _receivedMessages.length),
+                        itemBuilder: (context, index) {
+                          final msg =
+                              _receivedMessages[_receivedMessages.length -
+                                  1 -
+                                  index];
+                          return Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 4),
+                            child: Text(
+                              msg,
+                              style: TextStyle(
+                                fontFamily: "Urbanist",
+                                fontWeight: FontWeight.w500,
+                                fontSize: 12,
+                                color: AppColors.textSecondary,
+                              ),
+                            ),
+                          );
+                        },
                       ),
                     ),
                   ],
                 ),
               ),
-              Icon(
-                Icons.arrow_forward_ios,
-                size: 16,
-                color: AppColors.textSecondary,
-              ),
-            ],
-          ),
-        ).asGlass(
-          enabled: true,
-          tintColor: Colors.transparent,
-          clipBorderRadius: BorderRadius.circular(16),
-          frosted: true,
-          blurX: 300,
-          blurY: 300,
-        ),
+            ),
+          const SizedBox(height: 32),
+        ],
       ),
     );
   }
 
-  Widget _buildInstructionItem({
-    required IconData icon,
-    required String text,
-  }) {
+  Widget _buildInstructionItem({required IconData icon, required String text}) {
     return Row(
       children: [
         Container(
@@ -498,11 +740,7 @@ class _DeviceTabState extends State<DeviceTab> {
             shape: BoxShape.circle,
             color: const Color(0xFF6BAB90).withOpacity(0.2),
           ),
-          child: Icon(
-            icon,
-            size: 18,
-            color: const Color(0xFF6BAB90),
-          ),
+          child: Icon(icon, size: 18, color: const Color(0xFF6BAB90)),
         ),
         const SizedBox(width: 12),
         Expanded(
@@ -520,317 +758,6 @@ class _DeviceTabState extends State<DeviceTab> {
     );
   }
 
-  // -----------------------------------------------------------
-  // Connected View (Device Controls with Real Bluetooth)
-  // -----------------------------------------------------------
-  Widget _buildConnectedView() {
-    return SingleChildScrollView(
-      padding: const EdgeInsets.only(bottom: 180),
-      child: Container(
-        child: Column(
-          children: [
-            const SizedBox(height: 20),
-
-            // Connection Status Banner
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20),
-              child: Container(
-                padding: const EdgeInsets.all(16),
-                child: Row(
-                  children: [
-                    Container(
-                      width: 8,
-                      height: 8,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: const Color(0xFF34C759),
-                        boxShadow: [
-                          BoxShadow(
-                            color: const Color(0xFF34C759).withOpacity(0.5),
-                            blurRadius: 8,
-                            spreadRadius: 2,
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Text(
-                        '${_connectedDevice?.name ?? "Device"} Connected',
-                        style: TextStyle(
-                          fontFamily: "Urbanist",
-                          fontWeight: FontWeight.w600,
-                          fontSize: 14,
-                          color: AppColors.textPrimary,
-                        ),
-                      ),
-                    ),
-                    GestureDetector(
-                      onTap: _disconnectDevice,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 6,
-                        ),
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(12),
-                          color: Colors.green.withOpacity(0.1),
-                        ),
-                        child: Text(
-                          'Connected',
-                          style: TextStyle(
-                            fontFamily: "Urbanist",
-                            fontWeight: FontWeight.w600,
-                            fontSize: 12,
-                            color: Colors.green,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ).asGlass(
-                enabled: true,
-                tintColor: Colors.transparent,
-                clipBorderRadius: BorderRadius.circular(16),
-                frosted: true,
-                blurX: 500,
-                blurY: 500,
-              ),
-            ),
-
-            const SizedBox(height: 20),
-
-            // Device Health Section
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20),
-              child: FrostedCard(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Device Health',
-                      style: TextStyle(
-                        fontFamily: "Urbanist",
-                        fontWeight: FontWeight.w700,
-                        fontSize: 20,
-                      ),
-                    ),
-
-                    const SizedBox(height: 22),
-
-                    Row(
-                      children: [
-                        _buildHealthMetric(
-                          icon: Icons.battery_charging_full,
-                          label: "Battery",
-                          value: _batteryLevel,
-                          color: const Color(0xFF6BAB90),
-                        ),
-                        const SizedBox(width: 14),
-                        _buildHealthMetric(
-                          icon: Icons.speed,
-                          label: "Latency",
-                          value: _latency,
-                          color: const Color(0xFF7BA3BC),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-            ),
-
-            const SizedBox(height: 20),
-
-            // Device Controls Section
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20),
-              child: FrostedCard(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Device Controls',
-                      style: TextStyle(
-                          fontFamily: "Urbanist",
-                          fontWeight: FontWeight.w700,
-                          fontSize: 20,
-                          color: AppColors.pureBlack
-                      ),
-                    ),
-
-                    const SizedBox(height: 16),
-
-                    _buildControlItem(
-                      icon: Icons.camera_alt,
-                      label: "Camera",
-                      value: _cameraEnabled,
-                      onChanged: (val) {
-                        setState(() => _cameraEnabled = val);
-                        _sendCommand("CAMERA:${val ? 'ON' : 'OFF'}");
-                      },
-                    ),
-
-                    _buildControlItem(
-                      icon: Icons.volume_up,
-                      label: "Speaker",
-                      value: _speakerEnabled,
-                      onChanged: (val) {
-                        setState(() => _speakerEnabled = val);
-                        _sendCommand("SPEAKER:${val ? 'ON' : 'OFF'}");
-                      },
-                    ),
-
-                    _buildControlItem(
-                      icon: Icons.sensors,
-                      label: "ToF Sensor",
-                      value: _tofSensorEnabled,
-                      onChanged: (val) {
-                        setState(() => _tofSensorEnabled = val);
-                        _sendCommand("TOF:${val ? 'ON' : 'OFF'}");
-                      },
-                    ),
-
-                    _buildControlItem(
-                      icon: Icons.mic,
-                      label: "Microphone",
-                      value: _microphoneEnabled,
-                      onChanged: (val) {
-                        setState(() => _microphoneEnabled = val);
-                        _sendCommand("MIC:${val ? 'ON' : 'OFF'}");
-                      },
-                    ),
-
-                    _buildControlItem(
-                      icon: Icons.lightbulb_outline,
-                      label: "LED Indicator",
-                      value: _ledEnabled,
-                      onChanged: (val) {
-                        setState(() => _ledEnabled = val);
-                        _sendCommand("LED:${val ? 'ON' : 'OFF'}");
-                      },
-                      isLast: true,
-                    ),
-                  ],
-                ),
-              ),
-            ),
-
-            const SizedBox(height: 20),
-
-            // Data Log Section (Optional)
-            if (_receivedMessages.isNotEmpty)
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 20),
-                child: FrostedCard(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Recent Messages',
-                        style: TextStyle(
-                          fontFamily: "Urbanist",
-                          fontWeight: FontWeight.w700,
-                          fontSize: 20,
-                          color: AppColors.pureBlack,
-                        ),
-                      ),
-                      const SizedBox(height: 16),
-                      Container(
-                        constraints: BoxConstraints(maxHeight: 200),
-                        child: ListView.builder(
-                          shrinkWrap: true,
-                          itemCount: _receivedMessages.length > 5
-                              ? 5
-                              : _receivedMessages.length,
-                          itemBuilder: (context, index) {
-                            final msg = _receivedMessages[
-                            _receivedMessages.length - 1 - index];
-                            return Padding(
-                              padding: const EdgeInsets.symmetric(vertical: 4),
-                              child: Text(
-                                msg,
-                                style: TextStyle(
-                                  fontFamily: "Urbanist",
-                                  fontWeight: FontWeight.w500,
-                                  fontSize: 12,
-                                  color: AppColors.textSecondary,
-                                ),
-                              ),
-                            );
-                          },
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-          ],
-        ),
-      ).asGlass(
-          enabled: true,
-          tintColor: Colors.transparent,
-          clipBorderRadius: BorderRadius.circular(25.0),
-          frosted: true,
-          blurX: 500,
-          blurY: 500
-      ),
-    );
-  }
-
-  // -----------------------------------------------------------
-  // Mini Frosted Health Metric Card
-  // -----------------------------------------------------------
-  Widget _buildHealthMetric({
-    required IconData icon,
-    required String label,
-    required String value,
-    required Color color,
-  }) {
-    return Expanded(
-      child: Container(
-        padding: const EdgeInsets.all(18),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Icon(icon, size: 26, color: color),
-            const SizedBox(height: 14),
-
-            Text(
-              value,
-              style: TextStyle(
-                  fontFamily: "Urbanist",
-                  fontWeight: FontWeight.w700,
-                  fontSize: 14,
-                  color: AppColors.textPrimary
-              ),
-            ),
-
-            Text(
-              label,
-              style: TextStyle(
-                fontFamily: "Urbanist",
-                fontWeight: FontWeight.w700,
-                fontSize: 14,
-              ),
-            ),
-          ],
-        ),
-      ).asGlass(
-          enabled: true,
-          tintColor: Colors.transparent,
-          clipBorderRadius: BorderRadius.circular(25.0),
-          frosted: true,
-          blurX: 500,
-          blurY: 50
-      ),
-    );
-  }
-
-  // -----------------------------------------------------------
-  // iPhone-style Control Item
-  // -----------------------------------------------------------
   Widget _buildControlItem({
     required IconData icon,
     required String label,
@@ -844,20 +771,16 @@ class _DeviceTabState extends State<DeviceTab> {
           padding: const EdgeInsets.symmetric(vertical: 12.0),
           child: Row(
             children: [
-              Icon(
-                icon,
-                size: 24,
-                color: AppColors.textPrimary,
-              ),
+              Icon(icon, size: 24, color: AppColors.textPrimary),
               const SizedBox(width: 16),
               Expanded(
                 child: Text(
                   label,
                   style: TextStyle(
-                      fontFamily: "Urbanist",
-                      fontWeight: FontWeight.w600,
-                      fontSize: 16,
-                      color: AppColors.textPrimary
+                    fontFamily: "Urbanist",
+                    fontWeight: FontWeight.w600,
+                    fontSize: 16,
+                    color: AppColors.textPrimary,
                   ),
                 ),
               ),
@@ -875,9 +798,6 @@ class _DeviceTabState extends State<DeviceTab> {
     );
   }
 
-  // -----------------------------------------------------------
-  // iOS-style Toggle Switch
-  // -----------------------------------------------------------
   Widget _buildIOSStyleSwitch({
     required bool value,
     required ValueChanged<bool> onChanged,

@@ -1,283 +1,238 @@
-# MediaPipe Hand Landmark to Flutter - Bluetooth Integration
+# Raspberry Pi Server Requirements
 
-This system enables real-time hand landmark extraction from MediaPipe on Raspberry Pi 5 and transmits the data to a Flutter mobile application via Bluetooth.
-
-## 📁 Project Structure
-
-```
-appv1/
-├── raspberry_pi/
-│   └── mp_bluetooth_sender.py      # Python script for Raspberry Pi
-└── lib/
-    └── bluetooth/
-        ├── bluetooth_handler.dart    # Bluetooth connection manager
-        └── landmark_receiver.dart    # Landmark data receiver & visualizer
-```
-
-## 🔧 Raspberry Pi 5 Setup
-
-### Prerequisites
-
-1. **Hardware:**
-   - Raspberry Pi 5
-   - Pi Camera Module
-   - Bluetooth enabled
-
-2. **Software Dependencies:**
+## Installation Commands
 
 ```bash
 # Update system
-sudo apt-get update && sudo apt-get upgrade -y
+sudo apt update
+sudo apt upgrade -y
 
-# Install Python dependencies
-sudo apt-get install python3-pip python3-opencv -y
-pip3 install picamera2 mediapipe pybluez RPi.GPIO
+# Install Python packages
+pip3 install websockets flask mediapipe opencv-python picamera2 numpy
 
-# Enable camera and Bluetooth
-sudo raspi-config
-# Navigate to Interface Options > Camera > Enable
-# Navigate to Interface Options > Bluetooth > Enable
+# Or use requirements.txt
+pip3 install -r requirements.txt
 ```
 
-### Running the Python Script
+## requirements.txt
 
-1. **Copy the script to your Raspberry Pi:**
+```
+websockets>=11.0
+flask>=2.3.0
+mediapipe>=0.10.0
+opencv-python>=4.8.0
+picamera2>=0.3.0
+numpy>=1.24.0
+```
+
+## Server Files
+
+1. **websocket_server.py** - Real-time WebSocket streaming (Recommended)
+   - Port: 8765
+   - Protocol: ws://
+   - FPS: ~20 (configurable)
+
+2. **http_api.py** - HTTP polling fallback
+   - Port: 5000
+   - Endpoints: 
+     - GET /landmarks
+     - POST /command
+
+## Running the Server
+
+### WebSocket Server
 ```bash
-scp mp_bluetooth_sender.py pi@<raspberry_pi_ip>:~/
+python3 websocket_server.py
 ```
 
-2. **Make it executable:**
+Expected output:
+```
+WebSocket server listening on ws://0.0.0.0:8765
+Client connected
+```
+
+### HTTP API Server
 ```bash
-chmod +x mp_bluetooth_sender.py
+python3 http_api.py
 ```
 
-3. **Run the script:**
-```bash
-python3 mp_bluetooth_sender.py
+Expected output:
+```
+ * Serving Flask app 'http_api'
+ * Running on http://0.0.0.0:5000
 ```
 
-The script will:
-- Initialize the camera and MediaPipe
-- Start Bluetooth server on channel 22
-- Make device discoverable as "Handspeaks"
-- Wait for Flutter app to connect
-- Begin sending hand landmark data
+## MediaPipe Integration
 
-### Data Format
+Replace the `get_latest_landmarks()` function in `websocket_server.py` with your actual MediaPipe pipeline:
 
-The Python script sends JSON data in the following format:
+```python
+import mediapipe as mp
+import cv2
+from picamera2 import Picamera2
 
-```json
-{
-  "timestamp": 1702345678.123,
-  "hands_count": 2,
-  "hands": [
-    {
-      "hand_index": 0,
-      "label": "Right",
-      "confidence": 0.9876,
-      "landmarks": [
-        {"x": 0.5123, "y": 0.4567, "z": 0.0123},
-        // ... 21 landmarks total
-      ],
-      "features": {
-        "thumb_distance": 0.234,
-        "index_distance": 0.345,
-        "hand_size": 0.456
-      }
+mp_hands = mp.solutions.hands
+hands = mp_hands.Hands(
+    static_image_mode=False,
+    max_num_hands=2,
+    min_detection_confidence=0.5,
+    min_tracking_confidence=0.5
+)
+
+picam2 = Picamera2()
+picam2.configure(picam2.create_preview_configuration(main={"size": (640, 480)}))
+picam2.start()
+
+def get_latest_landmarks():
+    frame = picam2.capture_array()
+    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    results = hands.process(frame_rgb)
+    
+    payload = {
+        "timestamp": time.time(),
+        "hands_count": 0,
+        "hands": []
     }
-  ]
-}
+    
+    if results.multi_hand_landmarks:
+        payload["hands_count"] = len(results.multi_hand_landmarks)
+        
+        for idx, hand_landmarks in enumerate(results.multi_hand_landmarks):
+            hand_data = {
+                "hand_index": idx,
+                "label": results.multi_handedness[idx].classification[0].label,
+                "confidence": results.multi_handedness[idx].classification[0].score,
+                "landmarks": [
+                    {"x": lm.x, "y": lm.y, "z": lm.z}
+                    for lm in hand_landmarks.landmark
+                ],
+                "features": {
+                    "thumb_distance": calculate_thumb_distance(hand_landmarks),
+                    "index_distance": calculate_index_distance(hand_landmarks),
+                    "hand_size": calculate_hand_size(hand_landmarks)
+                }
+            }
+            payload["hands"].append(hand_data)
+    
+    return payload
 ```
 
-**Landmark Points (0-20):**
-- 0: Wrist
-- 1-4: Thumb (base to tip)
-- 5-8: Index finger
-- 9-12: Middle finger
-- 13-16: Ring finger
-- 17-20: Pinky finger
+## Firewall Configuration
 
-## 📱 Flutter App Setup
+```bash
+# Allow WebSocket port
+sudo ufw allow 8765
 
-### Prerequisites
+# Allow HTTP port
+sudo ufw allow 5000
 
-1. **Flutter SDK** (version 3.9.2 or higher)
-2. **Android Studio** or **VS Code** with Flutter extension
-3. **Physical Android device** with Bluetooth enabled
-
-### Installation Steps
-
-1. **Navigate to project directory:**
-```powershell
-cd C:\Users\HP\Downloads\sih\ISL_App\appv1
+# Check status
+sudo ufw status
 ```
 
-2. **Install dependencies:**
-```powershell
-flutter pub get
+## Auto-start on Boot (Optional)
+
+Create systemd service file:
+```bash
+sudo nano /etc/systemd/system/handspeaks.service
 ```
 
-3. **Enable Bluetooth permissions:**
-   - The app will request Bluetooth permissions on first launch
-   - Grant all required permissions
+Add content:
+```ini
+[Unit]
+Description=HandSpeaks WebSocket Server
+After=network.target
 
-4. **Run the app:**
-```powershell
-flutter run
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/appv1/raspberry_pi
+ExecStart=/usr/bin/python3 /home/pi/appv1/raspberry_pi/websocket_server.py
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
 ```
 
-### Using the App
-
-1. **Launch the app** on your Android device
-2. The app will automatically scan for "Handspeaks" device
-3. When found, it will **auto-connect**
-4. Once connected, you'll see:
-   - Real-time hand detection count
-   - Hand label (Left/Right) with confidence score
-   - Extracted features (thumb distance, index distance, hand size)
-   - Visual representation of hand landmarks
-   - Total packets received
-
-### Manual Connection
-
-If auto-connect fails:
-1. Tap the **refresh button** in the bottom-right corner
-2. Wait for device discovery
-3. Manually tap the "Handspeaks" device in the list
-
-## 🔄 System Architecture
-
-```
-┌─────────────────────┐          ┌──────────────────────┐
-│  Raspberry Pi 5     │          │   Flutter App        │
-│                     │          │                      │
-│  ┌───────────────┐  │          │  ┌────────────────┐  │
-│  │  Pi Camera    │  │          │  │  Bluetooth     │  │
-│  └───────┬───────┘  │          │  │  Handler       │  │
-│          │          │          │  └────────┬───────┘  │
-│  ┌───────▼───────┐  │          │           │          │
-│  │  MediaPipe    │  │          │  ┌────────▼───────┐  │
-│  │  Hands        │  │          │  │  Landmark      │  │
-│  └───────┬───────┘  │          │  │  Receiver      │  │
-│          │          │          │  └────────┬───────┘  │
-│  ┌───────▼───────┐  │ Bluetooth│           │          │
-│  │  Landmark     │◄─┼──────────┼──────────►│          │
-│  │  Extractor    │  │  RFCOMM  │  ┌────────▼───────┐  │
-│  └───────┬───────┘  │ Channel  │  │  Visualizer    │  │
-│          │          │    22    │  └────────────────┘  │
-│  ┌───────▼───────┐  │          │                      │
-│  │  Bluetooth    │  │          │                      │
-│  │  Server       │  │          │                      │
-│  └───────────────┘  │          │                      │
-└─────────────────────┘          └──────────────────────┘
+Enable and start:
+```bash
+sudo systemctl enable handspeaks
+sudo systemctl start handspeaks
+sudo systemctl status handspeaks
 ```
 
-## 🎯 Use Cases
+## Testing
 
-This system can be used for:
-- **Sign Language Recognition** - Real-time ISL gesture detection
-- **Gesture Control** - Control devices with hand gestures
-- **Hand Tracking** - Monitor hand movements for rehabilitation
-- **Interactive Applications** - Build gesture-based interfaces
-- **Data Collection** - Gather training data for ML models
+### Test Camera
+```bash
+libcamera-hello
+# OR
+raspistill -o test.jpg
+```
 
-## 🐛 Troubleshooting
+### Test Server Locally
+```bash
+# WebSocket (install wscat: npm install -g wscat)
+wscat -c ws://localhost:8765
 
-### Raspberry Pi Issues
+# HTTP
+curl http://localhost:5000/landmarks
+```
+
+### Monitor Logs
+```bash
+# Real-time logs
+tail -f /var/log/handspeaks.log
+
+# Or watch terminal output
+python3 websocket_server.py
+```
+
+## Performance Optimization
+
+### Reduce Latency
+```python
+# Lower resolution
+picam2.configure(picam2.create_preview_configuration(main={"size": (320, 240)}))
+
+# Reduce frame rate
+await asyncio.sleep(0.1)  # 10 FPS instead of 20
+```
+
+### Optimize MediaPipe
+```python
+hands = mp_hands.Hands(
+    static_image_mode=False,
+    max_num_hands=1,  # Track only one hand
+    min_detection_confidence=0.3,  # Lower threshold
+    min_tracking_confidence=0.3
+)
+```
+
+## Troubleshooting
 
 **Camera not detected:**
 ```bash
-# Check camera status
-vcgencmd get_camera
-
-# Should show: supported=1 detected=1
+# Enable camera interface
+sudo raspi-config
+# Interface Options → Camera → Enable
 ```
 
-**Bluetooth not working:**
+**ModuleNotFoundError:**
 ```bash
-# Check Bluetooth status
-sudo systemctl status bluetooth
-
-# Restart if needed
-sudo systemctl restart bluetooth
+pip3 install --upgrade pip
+pip3 install -r requirements.txt
 ```
 
-**Python dependencies missing:**
+**Port already in use:**
 ```bash
-# Reinstall dependencies
-pip3 install --upgrade picamera2 mediapipe pybluez
+# Find and kill process
+sudo lsof -i :8765
+sudo kill -9 <PID>
 ```
 
-### Flutter App Issues
-
-**Bluetooth permission denied:**
-- Go to Android Settings > Apps > Handspeaks > Permissions
-- Enable Location and Nearby Devices permissions
-
-**Connection timeout:**
-- Ensure Raspberry Pi script is running first
-- Check that both devices have Bluetooth enabled
-- Try restarting Bluetooth on both devices
-
-**No data received:**
-- Check that hands are visible in camera view
-- Verify GPIO pin 26 is HIGH on Raspberry Pi
-- Check terminal output for error messages
-
-## 🔧 Configuration
-
-### Raspberry Pi Script Configuration
-
-Edit `mp_bluetooth_sender.py`:
-
-```python
-# Change device name
-DEVICE_NAME = "YourDeviceName"
-
-# Change Bluetooth channel
-BLUETOOTH_PORT = 22  # Use ports 1-30
-
-# Change GPIO pin
-GPIO_PIN = 26
-
-# Adjust MediaPipe settings
-min_detection_confidence=0.7  # Lower for easier detection
-min_tracking_confidence=0.5   # Lower for smoother tracking
-
-# Adjust send rate
-send_interval = 2  # Send every N frames
-```
-
-### Flutter App Configuration
-
-Edit `landmark_receiver.dart`:
-
-```dart
-// Add custom gesture recognition
-// Process landmarks to detect specific gestures
-```
-
-## 📊 Performance
-
-- **Frame Rate:** ~30 FPS on Raspberry Pi 5
-- **Bluetooth Latency:** 50-100ms
-- **Detection Confidence:** >70% for clear hand visibility
-- **Data Rate:** ~10-20 KB/s (JSON format)
-
-## 🚀 Future Enhancements
-
-- [ ] Add gesture recognition models
-- [ ] Implement hand pose classification
-- [ ] Add recording/playback features
-- [ ] Support multiple device connections
-- [ ] Add WebSocket alternative for local network
-- [ ] Implement data compression for reduced latency
-
-## 📄 License
-
-This project is part of the Smart India Hackathon 2024.
-
-## 👥 Support
-
-For issues or questions, please refer to the project documentation or contact the development team.
+**Slow performance:**
+- Use Ethernet instead of WiFi
+- Reduce camera resolution
+- Lower frame rate
+- Enable hardware acceleration
